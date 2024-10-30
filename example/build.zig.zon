@@ -3,7 +3,8 @@
     .version = "0.0.0",
     .dependencies = .{
         .clog = .{
-            .path = "../",
+            .url = "git+https://github.com/Ratakor/clog#bd7b5d76ddbdc210c48e22654508a06052ff0a8e",
+            .hash = "12205d53064344ae73f8302c537d6584eb048907e11104d330bbe8444154f3b585b3",
         },
     },
     .paths = .{""},

@@ -19,5 +19,5 @@ exe.root_module.addImport("clog", clog);
 
 Check [example.zig](example/example.zig) for how to use it!
 
-# TODO
+## TODO
 - support windows colors

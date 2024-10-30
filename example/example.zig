@@ -1,5 +1,5 @@
-const clog = @import("clog");
 const std = @import("std");
+const clog = @import("clog");
 
 pub const std_options: std.Options = .{
     .logFn = clog.Comptime(.{}).standardLog,
