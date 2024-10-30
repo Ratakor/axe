@@ -5,10 +5,17 @@ const zeit = @import("zeit");
 pub const Config = struct {
     /// Set to `.none` to disable all styles.
     styles: Styles = .{},
+    /// The text to display for each log level.
     level_text: LevelText = .{},
+    /// The scope to use for the log messages. Ignored for `std.log`.
     scope: @Type(.enum_literal) = .default,
+    /// A comptime list of writers to write the log messages to.
+    /// See `Runtime.init` for runtime writers.
     writers: []const std.io.AnyWriter = &default_writers,
+    /// Whether to buffer the log messages before writing them.
     buffering: bool = true,
+    /// The time format to use for the log messages.
+    /// Not supported on the comptime interface.
     time: union(enum) {
         disabled,
         /// Format based on golang time package.
@@ -70,6 +77,7 @@ pub fn Comptime(comptime config: Config) type {
         /// pub const std_options: std.Options = .{
         ///     .logFn = clog.Comptime(.{}).standardLog,
         /// };
+        /// ```
         pub fn standardLog(
             comptime message_level: Level,
             comptime scope: @Type(.enum_literal),
@@ -207,7 +215,7 @@ pub fn Runtime(comptime config: Config) type {
 
         fn innerLog(
             self: Self,
-            comptime message_level: std.log.Level,
+            comptime message_level: Level,
             comptime format: []const u8,
             args: anytype,
         ) void {
@@ -265,7 +273,7 @@ pub fn Runtime(comptime config: Config) type {
             }
         }
 
-        fn levelAsText(comptime level: std.log.Level, color_enabled: bool) []const u8 {
+        fn levelAsText(comptime level: Level, color_enabled: bool) []const u8 {
             if (!color_enabled) {
                 return comptime @field(config.level_text, @tagName(level));
             }
