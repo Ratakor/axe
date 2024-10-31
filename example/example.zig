@@ -9,6 +9,8 @@ pub fn main() !void {
     // comptime
     const comptime_log = clog.Comptime(.{
         .styles = .none, // colored by default
+        .format = "[%l]%s: %f", // the log format string, default is "%l%s: %f"
+        .scope_format = " ~ %", // % is a placeholder for scope, default is "(%)"
         .level_text = .{ // same as zig by default
             .err = "ErrOr",
             .debug = "DeBuG",
@@ -22,6 +24,7 @@ pub fn main() !void {
     comptime_log.scoped(.main).err("comptime scoped", .{});
 
     // comptime with std.log
+    // std.log supports all the features of clog.Comptime
     std.log.info("std.log.info with clog.Comptime(.{{}})", .{});
     std.log.scoped(.main).warn("this is scoped", .{});
 
@@ -33,6 +36,8 @@ pub fn main() !void {
         f.writer().any(),
     };
     const log = try clog.Runtime(.{
+        .format = "%t %l%s: %f",
+        .scope_format = "@%",
         .styles = .{
             .err = &.{ .{ .bg_hex = "ff0000" }, .bold, .underline, },
             .warn = &.{ .{ .rgb = .{ .r = 255, .g = 255, .b = 0 } }, .strikethrough, },

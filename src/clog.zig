@@ -3,6 +3,19 @@ const Chameleon = @import("chameleon");
 const zeit = @import("zeit");
 
 pub const Config = struct {
+    /// The format to use for the log messages.
+    /// The following specifiers are supported:
+    /// - `%l`: The log level text.
+    /// - `%s`: The scope text, format is specified with `scope_format`.
+    /// - `%t`: The time, format is specified with `time`.
+    /// - `%f`: The actual format string.
+    /// - `%%`: A literal `%`.
+    format: []const u8 = "%l%s: %f",
+    /// The format to use for the scope text.
+    /// The following specifiers are supported:
+    /// - `%`: The scope name.
+    /// - `%%`: A literal `%`.
+    scope_format: []const u8 = "(%)",
     /// Set to `.none` to disable all styles.
     styles: Styles = .{},
     /// The text to display for each log level.
@@ -87,13 +100,7 @@ pub fn Comptime(comptime config: Config) type {
             if (comptime !std.log.logEnabled(message_level, config.scope)) {
                 return;
             }
-
-            const level_txt = comptime levelAsText(message_level);
-            const scope_prefix = if (scope == .default)
-                ": "
-            else
-                "@" ++ @tagName(scope) ++ ": ";
-            const actual_format = level_txt ++ scope_prefix ++ format ++ "\n";
+            const actual_format = comptime parseFormat(message_level, scope, format);
 
             nosuspend {
                 if (config.buffering) {
@@ -107,6 +114,37 @@ pub fn Comptime(comptime config: Config) type {
                         writer.print(actual_format, args) catch return;
                     }
                 }
+            }
+        }
+
+        fn parseFormat(
+            comptime level: Level,
+            comptime scope: @Type(.enum_literal),
+            comptime format: []const u8,
+        ) []const u8 {
+            comptime {
+                var fmt: []const u8 = "";
+                var i: usize = 0;
+                while (i < config.format.len) : (i += 1) {
+                    switch (config.format[i]) {
+                        '%' => {
+                            i += 1;
+                            if (i >= config.format.len) {
+                                @compileError("Missing format specifier after `%`.");
+                            }
+                            switch (config.format[i]) {
+                                'l' => fmt = fmt ++ levelAsText(level),
+                                's' => fmt = fmt ++ parseScopeFormat(config.scope_format, scope),
+                                'f' => fmt = fmt ++ format,
+                                't' => @compileError("Time specifier is not supported on the comptime interface."),
+                                '%' => fmt = fmt ++ "%",
+                                else => @compileError("Unknown format specifier after `%`: `" ++ &[_]u8{config.format[i]} ++ "`."),
+                            }
+                        },
+                        else => fmt = fmt ++ &[_]u8{config.format[i]},
+                    }
+                }
+                return fmt ++ "\n";
             }
         }
 
@@ -125,6 +163,19 @@ pub fn Comptime(comptime config: Config) type {
 /// Create a new runtime logger based on the given configuration.
 /// Runtime known writers are provided through the `init` function instead of `config`.
 pub fn Runtime(comptime config: Config) type {
+    comptime {
+        if (config.time == .strftime) {
+            var bogus: zeit.Time = .{};
+            const void_writer: std.io.GenericWriter(void, error{}, struct {
+                pub fn write(_: void, bytes: []const u8) error{}!usize {
+                    return bytes.len;
+                }
+            }.write) = .{ .context = {} };
+            bogus.strftime(void_writer, config.time.strftime) catch |e|
+                @compileError("Invalid strftime format: " ++ @errorName(e));
+        }
+    }
+
     return struct {
         const Self = @This();
 
@@ -136,6 +187,7 @@ pub fn Runtime(comptime config: Config) type {
         /// The result must not live longer than the parent.
         /// The result must not be deinitialized.
         // I think it's better to not make a dupe of the parent to keep the same interface as Comptime.
+        // It's also more efficient and convenient.
         pub fn scoped(self: Self, comptime scope: @Type(.enum_literal)) T: {
             var new_config = config;
             new_config.scope = scope;
@@ -200,7 +252,6 @@ pub fn Runtime(comptime config: Config) type {
             self.innerLog(.warn, format, args);
         }
 
-
         /// Log an info message. This log level is intended to be used for
         /// general messages about the state of the program.
         pub fn info(self: Self, comptime format: []const u8, args: anytype) void {
@@ -223,12 +274,6 @@ pub fn Runtime(comptime config: Config) type {
                 return;
             }
 
-            const level_txt = levelAsText(message_level, self.color_enabled);
-            const scope_prefix = if (config.scope == .default)
-                ": "
-            else
-                "@" ++ @tagName(config.scope) ++ ": ";
-
             const time = if (config.time == .disabled) {} else t: {
                 const now = zeit.instant(.{ .timezone = &self.timezone }) catch unreachable;
                 break :t now.time();
@@ -238,39 +283,50 @@ pub fn Runtime(comptime config: Config) type {
                 if (config.buffering) {
                     for (self.writers) |writer| {
                         var bw = std.io.bufferedWriter(writer);
-                        const bw_writer = bw.writer();
-                        printTime(bw_writer, time);
-                        bw_writer.writeAll(level_txt) catch return;
-                        bw_writer.print(scope_prefix ++ format ++ "\n", args) catch return;
+                        self.print(bw.writer(), time, message_level, format, args);
                         bw.flush() catch return;
                     }
                 } else {
                     for (self.writers) |writer| {
-                        printTime(writer, time);
-                        writer.writeAll(level_txt) catch return;
-                        writer.print(scope_prefix ++ format ++ "\n", args) catch return;
+                        self.print(writer, time, message_level, format, args);
                     }
                 }
             }
         }
 
-        fn printTime(writer: anytype, time: zeit.Time) void {
-            switch (config.time) {
-                .disabled => {},
-                .gofmt => |gofmt| {
-                    time.gofmt(writer, gofmt.fmt ++ " ") catch return;
-                },
-                .strftime => |fmt| {
-                    time.strftime(writer, fmt ++ " ") catch |e| switch (e) {
-                        error.InvalidFormat,
-                        error.Overflow,
-                        error.UnsupportedSpecifier,
-                        error.UnknownSpecifier,
-                        => std.debug.panic("Invalid strftime format: {}", .{e}),
-                        else => return,
-                    };
-                },
+        inline fn print(
+            self: Self,
+            writer: anytype,
+            time: if (config.time == .disabled) void else zeit.Time,
+            comptime level: Level,
+            comptime format: []const u8,
+            args: anytype,
+        ) void {
+            comptime var i: usize = 0;
+            inline while (i < config.format.len) : (i += 1) {
+                switch (config.format[i]) {
+                    '%' => {
+                        i += 1;
+                        if (i >= config.format.len) {
+                            @compileError("Missing format specifier after `%`.");
+                        }
+                        switch (config.format[i]) {
+                            'l' => writer.writeAll(levelAsText(level, self.color_enabled)) catch return,
+                            's' => writer.writeAll(comptime parseScopeFormat(config.scope_format, config.scope)) catch return,
+                            't' => switch (config.time) {
+                                .disabled => {},
+                                .gofmt => |gofmt| time.gofmt(writer, gofmt.fmt) catch return,
+                                .strftime => |fmt| time.strftime(writer, fmt) catch return,
+                            },
+                            'f' => writer.print(format, args) catch return,
+                            '%' => writer.writeAll("%") catch return,
+                            else => @compileError("Unknown format specifier after `%`: `" ++ &[_]u8{config.format[i]} ++ "`."),
+                        }
+                    },
+                    else => writer.writeByte(config.format[i]) catch return,
+                }
             }
+            writer.writeAll("\n") catch return;
         }
 
         fn levelAsText(comptime level: Level, color_enabled: bool) []const u8 {
@@ -423,3 +479,26 @@ pub const GoTimeFormat = struct {
     pub const date_only: GoTimeFormat = .{ .fmt = "2006-01-02" };
     pub const time_only: GoTimeFormat = .{ .fmt = "15:04:05" };
 };
+
+fn parseScopeFormat(comptime format: []const u8, comptime scope: @Type(.enum_literal)) []const u8 {
+    comptime {
+        if (scope == .default) {
+            return "";
+        }
+
+        var fmt: []const u8 = "";
+        var i: usize = 0;
+        while (i < format.len) : (i += 1) {
+            switch (format[i]) {
+                '%' => if (i + 1 >= format.len or format[i + 1] != '%') {
+                    fmt = fmt ++ @tagName(scope);
+                } else {
+                    fmt = fmt ++ "%";
+                    i += 1;
+                },
+                else => fmt = fmt ++ &[_]u8{format[i]},
+            }
+        }
+        return fmt;
+    }
+}

@@ -21,3 +21,4 @@ Check [example.zig](example/example.zig) for how to use it!
 
 ## TODO
 - support windows colors
+- support a different config for each files?
