@@ -48,5 +48,6 @@ logInfoSrc(axe.Comptime(.{}), @src(), "Hello, World!", .{});
 
 ## TODO
 - support windows colors
-- support a different config for each files?
+- support a different config for each writers?
+  - maybe just use std.fs.File.supportsAnsiEscapeCodes instead
 - actually have a good interface for @src (impossible)

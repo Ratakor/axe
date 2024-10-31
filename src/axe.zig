@@ -78,6 +78,9 @@ pub fn Comptime(comptime config: Config) type {
             else => unreachable,
         };
 
+        /// The list of writers to write the log messages to.
+        pub const writers = config.writers;
+
         /// Returns a scoped logging namespace that logs all messages using the scope
         /// provided here.
         pub fn scoped(comptime scope: @Type(.enum_literal)) type {
@@ -559,4 +562,101 @@ fn parseScopeFormat(comptime format: []const u8, comptime scope: @Type(.enum_lit
         }
         return fmt;
     }
+}
+
+test "runtime log without styles" {
+    const expectEqualStrings = std.testing.expectEqualStrings;
+    var empty_env = std.process.EnvMap.init(std.testing.allocator);
+    defer empty_env.deinit();
+    var list = std.ArrayList(u8).init(std.testing.allocator);
+    defer list.deinit();
+
+    const log = try Runtime(.{
+        .styles = .none,
+        .buffering = false,
+    }).init(std.testing.allocator, &.{list.writer().any()}, &empty_env);
+    defer log.deinit(std.testing.allocator);
+
+    log.info("Hello, {s}!", .{"world"});
+    try expectEqualStrings("info: Hello, world!\n", list.items);
+    list.resize(0) catch unreachable;
+
+    log.scoped(.my_scope).warn("", .{});
+    try expectEqualStrings("warning(my_scope): \n", list.items);
+    list.resize(0) catch unreachable;
+
+    log.scoped(.other_scope).err("`{s}` not found: {}", .{ "test.txt", error.FileNotFound });
+    try expectEqualStrings("error(other_scope): `test.txt` not found: error.FileNotFound\n", list.items);
+    list.resize(0) catch unreachable;
+}
+
+test "runtime log with NO_COLOR=1" {
+    const expectEqualStrings = std.testing.expectEqualStrings;
+    var env = std.process.EnvMap.init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("NO_COLOR", "1");
+    var list = std.ArrayList(u8).init(std.testing.allocator);
+    defer list.deinit();
+
+    const log = try Runtime(.{
+        .buffering = false,
+    }).init(std.testing.allocator, &.{list.writer().any()}, &env);
+    defer log.deinit(std.testing.allocator);
+
+    log.info("Hello, {s}!", .{"world"});
+    try expectEqualStrings("info: Hello, world!\n", list.items);
+    list.resize(0) catch unreachable;
+
+    log.scoped(.my_scope).warn("", .{});
+    try expectEqualStrings("warning(my_scope): \n", list.items);
+    list.resize(0) catch unreachable;
+
+    log.scoped(.other_scope).err("`{s}` not found: {}", .{ "test.txt", error.FileNotFound });
+    try expectEqualStrings("error(other_scope): `test.txt` not found: error.FileNotFound\n", list.items);
+    list.resize(0) catch unreachable;
+}
+
+test "runtime log with complex config & NO_COLOR unset" {
+    const expectEqualStrings = std.testing.expectEqualStrings;
+    var empty_env = std.process.EnvMap.init(std.testing.allocator);
+    defer empty_env.deinit();
+    var list = std.ArrayList(u8).init(std.testing.allocator);
+    defer list.deinit();
+    comptime var chameleon: Chameleon = .{};
+
+    const log = try Runtime(.{
+        .format = "[%l]%s: %f",
+        .scope_format = " %% %",
+        .styles = .{
+            .err = &.{.red},
+            .warn = &.{.yellow},
+            .info = &.{.blue},
+            .debug = &.{.cyan},
+        },
+        .level_text = .{
+            .err = "ERROR",
+            .warn = "WARNING",
+            .info = "INFO",
+            .debug = "DEBUG",
+        },
+        .buffering = false,
+        .time = .disabled, // can't test because it's inconsistent
+        .mutex = .default,
+    }).init(std.testing.allocator, &.{list.writer().any()}, &empty_env);
+    defer log.deinit(std.testing.allocator);
+
+    log.info("Hello, {s}!", .{"world"});
+    try expectEqualStrings("[" ++ chameleon.blue().fmt("INFO") ++ "]: Hello, world!\n", list.items);
+    list.resize(0) catch unreachable;
+
+    log.scoped(.my_scope).warn("", .{});
+    try expectEqualStrings("[" ++ chameleon.yellow().fmt("WARNING") ++ "] % my_scope: \n", list.items);
+    list.resize(0) catch unreachable;
+
+    log.scoped(.other_scope).err("`{s}` not found: {}", .{ "test.txt", error.FileNotFound });
+    try expectEqualStrings(
+        "[" ++ chameleon.red().fmt("ERROR") ++ "] % other_scope: `test.txt` not found: error.FileNotFound\n",
+        list.items,
+    );
+    list.resize(0) catch unreachable;
 }
