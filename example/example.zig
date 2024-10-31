@@ -16,7 +16,7 @@ pub fn main() !void {
             .debug = "DeBuG",
         },
         // .scope = .main, // scope can also be set here, it will be ignored for std.log
-        .writers = &.{ std.io.getStdOut().writer().any() }, // stderr is default
+        .writers = &.{std.io.getStdOut().writer().any()}, // stderr is default
         .buffering = true, // true by default
         .time = .disabled, // disabled by default, doesn't work at comptime
     });
@@ -39,9 +39,9 @@ pub fn main() !void {
         .format = "%t %l%s: %f",
         .scope_format = "@%",
         .styles = .{
-            .err = &.{ .{ .bg_hex = "ff0000" }, .bold, .underline, },
-            .warn = &.{ .{ .rgb = .{ .r = 255, .g = 255, .b = 0 } }, .strikethrough, },
-            .info = &.{ .green, .italic, },
+            .err = &.{ .{ .bg_hex = "ff0000" }, .bold, .underline },
+            .warn = &.{ .{ .rgb = .{ .r = 255, .g = 255, .b = 0 } }, .strikethrough },
+            .info = &.{ .green, .italic },
         },
         .level_text = .{
             .err = "ERROR",
