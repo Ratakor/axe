@@ -11,6 +11,12 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main() !void {
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+    var env = try std.process.getEnvMap(allocator);
+    defer env.deinit();
+
     // comptime
     const comptime_log = axe.Comptime(.{
         .styles = .none, // colored by default
@@ -58,11 +64,31 @@ pub fn main() !void {
         // .writers = &writers, // not possible because f.writer().any() is not comptime
         .time = .{ .gofmt = .date_time }, // .date_time is a preset but custom format is also possible
         .mutex = .default, // default to std.Thread.Mutex
-    }).init(std.heap.page_allocator, &writers, null);
-    defer log.deinit(std.heap.page_allocator);
+    }).init(allocator, &writers, &env); // null can be used instead of &env
+    defer log.deinit(allocator);
 
     log.debug("Hello, runtime! This will have no color if NO_COLOR is defined", .{});
     log.info("the time can be formatted like strftime or time.go", .{});
     log.scoped(.main).err("scope also works at runtime", .{});
     log.warn("this is output to stderr and log.txt", .{});
+
+    // json log
+    // it's fairly easy to change "message" to a custom json struct to have a fully structured log
+    var json_file = try std.fs.cwd().createFile("log.json", .{});
+    defer json_file.close();
+    const json_log = try axe.Runtime(.{
+        .format =
+        \\{"level":"%l",%s"time":"%t","message":"%f"}
+        \\
+        ,
+        .scope_format =
+        \\"scope":"%",
+        ,
+        .styles = .none,
+        .time = .{ .gofmt = .rfc3339 },
+    }).init(allocator, &.{json_file.writer().any()}, &env);
+    defer json_log.deinit(allocator);
+
+    json_log.debug("json log", .{});
+    json_log.scoped(.main).info("json scoped", .{});
 }

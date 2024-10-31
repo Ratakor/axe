@@ -175,6 +175,8 @@ pub fn Comptime(comptime config: Config) type {
                                 else => @compileError("Unknown format specifier after `%`: `" ++ &[_]u8{config.format[i]} ++ "`."),
                             }
                         },
+                        '{' => fmt = fmt ++ "{{",
+                        '}' => fmt = fmt ++ "}}",
                         else => fmt = fmt ++ &[_]u8{config.format[i]},
                     }
                 }
@@ -242,6 +244,8 @@ pub fn Runtime(comptime config: Config) type {
 
         /// Instantiate a new logger.
         /// If `writers` is not `null` it will be used instead of the writers provided through `config`.
+        /// If `env_map` is not `null` it will be used instead of `std.process.getEnvMap`.
+        /// `env_map` is only used during initialization and is not stored.
         pub fn init(
             allocator: std.mem.Allocator,
             writers: ?[]const std.io.AnyWriter,

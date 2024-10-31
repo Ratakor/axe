@@ -1,3 +1,4 @@
 .zig-cache/
 zig-out/
 example/log.txt
+example/log.json

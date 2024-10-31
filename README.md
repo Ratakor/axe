@@ -1,8 +1,8 @@
 # Axe 🪓
 
 A fully customizable, drop-in replacement for `std.Options.LogFn` with support
-for multiple file logging, buffering, colors (NO_COLOR supported), time and
-thread safety (multiple mutex interface available)!
+for multiple file logging, buffering, colors (NO_COLOR supported), JSON, time
+and thread safety (multiple mutex interface available)!
 
 ![](screenshot.png)
 
