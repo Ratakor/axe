@@ -14,7 +14,7 @@ pub fn main() !void {
     // comptime
     const comptime_log = axe.Comptime(.{
         .styles = .none, // colored by default
-        .format = "[%l]%s: %f", // the log format string, default is "%l%s: %f"
+        .format = "[%l]%s: %f\n", // the log format string, default is "%l%s: %f\n"
         .scope_format = " ~ %", // % is a placeholder for scope, default is "(%)"
         .level_text = .{ // same as zig by default
             .err = "ErrOr",
@@ -42,7 +42,7 @@ pub fn main() !void {
         f.writer().any(),
     };
     const log = try axe.Runtime(.{
-        .format = "%t %l%s: %f",
+        .format = "%t %l%s: %f\n",
         .scope_format = "@%",
         .styles = .{
             .err = &.{ .{ .bg_hex = "ff0000" }, .bold, .underline },

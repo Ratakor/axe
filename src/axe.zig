@@ -11,7 +11,7 @@ pub const Config = struct {
     /// - `%t`: The time, format is specified with `time`.
     /// - `%f`: The actual format string.
     /// - `%%`: A literal `%`.
-    format: []const u8 = "%l%s: %f",
+    format: []const u8 = "%l%s: %f\n",
     /// The format to use for the scope text.
     /// The following specifiers are supported:
     /// - `%`: The scope name.
@@ -178,7 +178,7 @@ pub fn Comptime(comptime config: Config) type {
                         else => fmt = fmt ++ &[_]u8{config.format[i]},
                     }
                 }
-                return fmt ++ "\n";
+                return fmt;
             }
         }
 
@@ -387,7 +387,6 @@ pub fn Runtime(comptime config: Config) type {
                     else => writer.writeByte(config.format[i]) catch return,
                 }
             }
-            writer.writeAll("\n") catch return;
         }
 
         fn levelAsText(comptime level: Level, color_enabled: bool) []const u8 {
@@ -625,7 +624,7 @@ test "runtime log with complex config & NO_COLOR unset" {
     comptime var chameleon: Chameleon = .{};
 
     const log = try Runtime(.{
-        .format = "[%l]%s: %f",
+        .format = "[%l]%s: %f", // no newline
         .scope_format = " %% %",
         .styles = .{
             .err = &.{.red},
@@ -646,16 +645,16 @@ test "runtime log with complex config & NO_COLOR unset" {
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello, {s}!", .{"world"});
-    try expectEqualStrings("[" ++ chameleon.blue().fmt("INFO") ++ "]: Hello, world!\n", list.items);
+    try expectEqualStrings("[" ++ chameleon.blue().fmt("INFO") ++ "]: Hello, world!", list.items);
     list.resize(0) catch unreachable;
 
     log.scoped(.my_scope).warn("", .{});
-    try expectEqualStrings("[" ++ chameleon.yellow().fmt("WARNING") ++ "] % my_scope: \n", list.items);
+    try expectEqualStrings("[" ++ chameleon.yellow().fmt("WARNING") ++ "] % my_scope: ", list.items);
     list.resize(0) catch unreachable;
 
     log.scoped(.other_scope).err("`{s}` not found: {}", .{ "test.txt", error.FileNotFound });
     try expectEqualStrings(
-        "[" ++ chameleon.red().fmt("ERROR") ++ "] % other_scope: `test.txt` not found: error.FileNotFound\n",
+        "[" ++ chameleon.red().fmt("ERROR") ++ "] % other_scope: `test.txt` not found: error.FileNotFound",
         list.items,
     );
     list.resize(0) catch unreachable;
