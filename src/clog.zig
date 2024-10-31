@@ -194,18 +194,16 @@ pub fn Comptime(comptime config: Config) type {
 /// Create a new runtime logger based on the given configuration.
 /// Runtime known writers are provided through the `init` function instead of `config`.
 pub fn Runtime(comptime config: Config) type {
-    comptime {
-        if (config.time == .strftime) {
-            var bogus: zeit.Time = .{};
-            const void_writer: std.io.GenericWriter(void, error{}, struct {
-                pub fn write(_: void, bytes: []const u8) error{}!usize {
-                    return bytes.len;
-                }
-            }.write) = .{ .context = {} };
-            bogus.strftime(void_writer, config.time.strftime) catch |e|
-                @compileError("Invalid strftime format: " ++ @errorName(e));
-        }
-    }
+    if (config.time == .strftime) comptime {
+        var bogus: zeit.Time = .{};
+        const void_writer: std.io.GenericWriter(void, error{}, struct {
+            pub fn write(_: void, bytes: []const u8) error{}!usize {
+                return bytes.len;
+            }
+        }.write) = .{ .context = {} };
+        bogus.strftime(void_writer, config.time.strftime) catch |e|
+            @compileError("Invalid strftime format: " ++ @errorName(e));
+    };
 
     return struct {
         const Self = @This();
@@ -374,7 +372,7 @@ pub fn Runtime(comptime config: Config) type {
                             'l' => writer.writeAll(levelAsText(level, self.color_enabled)) catch return,
                             's' => writer.writeAll(comptime parseScopeFormat(config.scope_format, config.scope)) catch return,
                             't' => switch (config.time) {
-                                .disabled => {},
+                                .disabled => @compileError("Time specifier without time format."),
                                 .gofmt => |gofmt| time.gofmt(writer, gofmt.fmt) catch return,
                                 .strftime => |fmt| time.strftime(writer, fmt) catch return,
                             },
