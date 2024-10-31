@@ -1,7 +1,8 @@
 # Clog
 
 A fully customizable, drop-in replacement for `std.Options.LogFn` with support
-for multiple file logging, buffering, colors (NO_COLOR supported) and time!
+for multiple file logging, buffering, colors (NO_COLOR supported), time and
+locking!
 
 ![](screenshot.png)
 

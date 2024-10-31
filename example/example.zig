@@ -2,7 +2,12 @@ const std = @import("std");
 const clog = @import("clog");
 
 pub const std_options: std.Options = .{
-    .logFn = clog.Comptime(.{}).standardLog,
+    .logFn = clog.Comptime(.{
+        .mutex = .{ .global = .{
+            .lock = std.debug.lockStdErr,
+            .unlock = std.debug.unlockStdErr,
+        } },
+    }).standardLog,
 };
 
 pub fn main() !void {
@@ -19,6 +24,7 @@ pub fn main() !void {
         .writers = &.{std.io.getStdOut().writer().any()}, // stderr is default
         .buffering = true, // true by default
         .time = .disabled, // disabled by default, doesn't work at comptime
+        .mutex = .none, // none by default
     });
     comptime_log.debug("Hello, comptime with no colors", .{});
     comptime_log.scoped(.main).err("comptime scoped", .{});
@@ -51,6 +57,7 @@ pub fn main() !void {
         },
         // .writers = &writers, // not possible because f.writer().any() is not comptime
         .time = .{ .gofmt = .date_time }, // .date_time is a preset but custom format is also possible
+        .mutex = .default, // default to std.Thread.Mutex
     }).init(std.heap.page_allocator, &writers, null);
     defer log.deinit(std.heap.page_allocator);
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Chameleon = @import("chameleon");
 const zeit = @import("zeit");
 
@@ -36,6 +37,17 @@ pub const Config = struct {
         /// Format based on strftime(3).
         strftime: []const u8,
     } = .disabled,
+    /// The mutex interface to use for the log messages.
+    /// default and custom are not supported on the comptime interface.
+    mutex: union(enum) {
+        none,
+        default,
+        custom: type,
+        global: struct {
+            lock: fn () void,
+            unlock: fn () void,
+        },
+    } = .none,
 };
 
 const default_writers = [_]std.io.AnyWriter{
@@ -48,8 +60,24 @@ pub fn Comptime(comptime config: Config) type {
     if (config.time != .disabled) {
         @compileError("Time is not supported on the comptime interface, use Runtime instead.");
     }
+    switch (config.mutex) {
+        .none, .global => {},
+        .default, .custom => @compileError("Use `global` mutex for comptime logging."),
+    }
 
     return struct {
+        fn dummy() void {}
+        const lock = switch (config.mutex) {
+            .none => dummy,
+            .global => |g| g.lock,
+            else => unreachable,
+        };
+        const unlock = switch (config.mutex) {
+            .none => dummy,
+            .global => |g| g.unlock,
+            else => unreachable,
+        };
+
         /// Returns a scoped logging namespace that logs all messages using the scope
         /// provided here.
         pub fn scoped(comptime scope: @Type(.enum_literal)) type {
@@ -101,6 +129,9 @@ pub fn Comptime(comptime config: Config) type {
                 return;
             }
             const actual_format = comptime parseFormat(message_level, scope, format);
+
+            lock();
+            defer unlock();
 
             nosuspend {
                 if (config.buffering) {
@@ -180,8 +211,15 @@ pub fn Runtime(comptime config: Config) type {
         const Self = @This();
 
         color_enabled: bool,
-        timezone: if (config.time == .disabled) void else zeit.TimeZone,
+        timezone: if (config.time != .disabled) zeit.TimeZone else void,
         writers: []const std.io.AnyWriter,
+        mutex: if (MutexType) |T| *T else void,
+
+        const MutexType: ?type = switch (config.mutex) {
+            .none, .global => null,
+            .default => if (builtin.single_threaded) null else std.Thread.Mutex,
+            .custom => |T| T,
+        };
 
         /// Create a new logger with a different scope.
         /// The result must not live longer than the parent.
@@ -197,6 +235,7 @@ pub fn Runtime(comptime config: Config) type {
                 .color_enabled = self.color_enabled,
                 .timezone = self.timezone,
                 .writers = self.writers,
+                .mutex = self.mutex,
             };
         }
 
@@ -224,8 +263,13 @@ pub fn Runtime(comptime config: Config) type {
             const no_color = env_map.get("NO_COLOR");
             return .{
                 .color_enabled = no_color == null or no_color.?.len == 0,
-                .timezone = if (config.time == .disabled) {} else try zeit.local(allocator, env_map),
+                .timezone = if (config.time != .disabled) try zeit.local(allocator, env_map) else {},
                 .writers = try allocator.dupe(std.io.AnyWriter, writers orelse config.writers),
+                .mutex = if (MutexType) |T| mx: {
+                    const mutex = try allocator.create(T);
+                    mutex.* = .{};
+                    break :mx mutex;
+                } else {},
             };
         }
 
@@ -234,6 +278,9 @@ pub fn Runtime(comptime config: Config) type {
         pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
             if (config.time != .disabled) {
                 self.timezone.deinit();
+            }
+            if (MutexType != null) {
+                allocator.destroy(self.mutex);
             }
             allocator.free(self.writers);
         }
@@ -274,10 +321,23 @@ pub fn Runtime(comptime config: Config) type {
                 return;
             }
 
-            const time = if (config.time == .disabled) {} else t: {
+            switch (config.mutex) {
+                .none => {},
+                .global => |g| g.lock(),
+                .default => if (!builtin.single_threaded) self.mutex.lock(),
+                .custom => self.mutex.lock(),
+            }
+            defer switch (config.mutex) {
+                .none => {},
+                .global => |g| g.unlock(),
+                .default => if (!builtin.single_threaded) self.mutex.unlock(),
+                .custom => self.mutex.unlock(),
+            };
+
+            const time = if (config.time != .disabled) t: {
                 const now = zeit.instant(.{ .timezone = &self.timezone }) catch unreachable;
                 break :t now.time();
-            };
+            } else {};
 
             nosuspend {
                 if (config.buffering) {
@@ -297,7 +357,7 @@ pub fn Runtime(comptime config: Config) type {
         inline fn print(
             self: Self,
             writer: anytype,
-            time: if (config.time == .disabled) void else zeit.Time,
+            time: if (config.time != .disabled) zeit.Time else void,
             comptime level: Level,
             comptime format: []const u8,
             args: anytype,
