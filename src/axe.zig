@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const Chameleon = @import("chameleon");
+const Chameleon = @import("chameleon").ComptimeChameleon;
 const zeit = @import("zeit");
 
 pub const Config = struct {
@@ -116,7 +116,7 @@ pub fn Comptime(comptime config: Config) type {
         /// The scope given in `config` will be ignored by the standard log functions.
         /// ```zig
         /// pub const std_options: std.Options = .{
-        ///     .logFn = clog.Comptime(.{}).standardLog,
+        ///     .logFn = axe.Comptime(.{}).standardLog,
         /// };
         /// ```
         pub fn standardLog(
@@ -181,7 +181,7 @@ pub fn Comptime(comptime config: Config) type {
 
         fn levelAsText(comptime level: Level) []const u8 {
             comptime {
-                var chameleon = Chameleon.initComptime();
+                var chameleon: Chameleon = .{};
                 for (@field(config.styles, @tagName(level))) |style| {
                     Style.apply(&chameleon, style);
                 }
@@ -391,7 +391,7 @@ pub fn Runtime(comptime config: Config) type {
             if (!color_enabled) {
                 return comptime @field(config.level_text, @tagName(level));
             }
-            comptime var chameleon = Chameleon.initComptime();
+            comptime var chameleon: Chameleon = .{};
             comptime for (@field(config.styles, @tagName(level))) |style| {
                 Style.apply(&chameleon, style);
             };

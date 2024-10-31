@@ -12,11 +12,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     }).module("zeit");
-    const clog = b.addModule("clog", .{
-        .root_source_file = b.path("src/clog.zig"),
+    const axe = b.addModule("axe", .{
+        .root_source_file = b.path("src/axe.zig"),
         .optimize = optimize,
         .target = target,
     });
-    clog.addImport("chameleon", chameleon);
-    clog.addImport("zeit", zeit);
+    axe.addImport("chameleon", chameleon);
+    axe.addImport("zeit", zeit);
 }

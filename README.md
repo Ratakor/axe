@@ -1,8 +1,8 @@
-# Clog
+# Axe 🪓
 
 A fully customizable, drop-in replacement for `std.Options.LogFn` with support
 for multiple file logging, buffering, colors (NO_COLOR supported), time and
-mutex!
+thread safety (multiple mutex interface available)!
 
 ![](screenshot.png)
 
@@ -10,12 +10,12 @@ mutex!
 
 Add it to an existing project with this command:
 ```sh
-zig fetch --save git+https://github.com/Ratakor/clog
+zig fetch --save git+https://github.com/Ratakor/axe
 ```
 Then add the module your build.zig.
 ```zig
-const clog = b.dependency("clog", .{}).module("clog");
-exe.root_module.addImport("clog", clog);
+const axe = b.dependency("axe", .{}).module("axe");
+exe.root_module.addImport("axe", axe);
 ```
 
 Check [example.zig](example/example.zig) for how to use it!
@@ -43,7 +43,7 @@ fn logInfoSrc(
 }
 
 // info: example.zig:main:84:36: Hello, World!
-logInfoSrc(clog.Comptime(.{}), @src(), "Hello, World!", .{});
+logInfoSrc(axe.Comptime(.{}), @src(), "Hello, World!", .{});
 ```
 
 ## TODO

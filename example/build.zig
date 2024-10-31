@@ -4,14 +4,14 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const clog = b.dependency("clog", .{}).module("clog");
+    const axe = b.dependency("axe", .{}).module("axe");
     const exe = b.addExecutable(.{
         .name = "example",
         .root_source_file = b.path("example.zig"),
         .target = target,
         .optimize = optimize,
     });
-    exe.root_module.addImport("clog", clog);
+    exe.root_module.addImport("axe", axe);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

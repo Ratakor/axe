@@ -1,8 +1,8 @@
 const std = @import("std");
-const clog = @import("clog");
+const axe = @import("axe");
 
 pub const std_options: std.Options = .{
-    .logFn = clog.Comptime(.{
+    .logFn = axe.Comptime(.{
         .mutex = .{ .global = .{
             .lock = std.debug.lockStdErr,
             .unlock = std.debug.unlockStdErr,
@@ -12,7 +12,7 @@ pub const std_options: std.Options = .{
 
 pub fn main() !void {
     // comptime
-    const comptime_log = clog.Comptime(.{
+    const comptime_log = axe.Comptime(.{
         .styles = .none, // colored by default
         .format = "[%l]%s: %f", // the log format string, default is "%l%s: %f"
         .scope_format = " ~ %", // % is a placeholder for scope, default is "(%)"
@@ -30,8 +30,8 @@ pub fn main() !void {
     comptime_log.scoped(.main).err("comptime scoped", .{});
 
     // comptime with std.log
-    // std.log supports all the features of clog.Comptime
-    std.log.info("std.log.info with clog.Comptime(.{{}})", .{});
+    // std.log supports all the features of axe.Comptime
+    std.log.info("std.log.info with axe.Comptime(.{{}})", .{});
     std.log.scoped(.main).warn("this is scoped", .{});
 
     // runtime
@@ -41,7 +41,7 @@ pub fn main() !void {
         std.io.getStdErr().writer().any(),
         f.writer().any(),
     };
-    const log = try clog.Runtime(.{
+    const log = try axe.Runtime(.{
         .format = "%t %l%s: %f",
         .scope_format = "@%",
         .styles = .{
