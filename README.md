@@ -2,7 +2,7 @@
 
 A fully customizable, drop-in replacement for `std.Options.LogFn` with support
 for multiple file logging, buffering, colors (NO_COLOR supported), time and
-locking!
+mutex!
 
 ![](screenshot.png)
 
@@ -20,6 +20,33 @@ exe.root_module.addImport("clog", clog);
 
 Check [example.zig](example/example.zig) for how to use it!
 
+## Log with location
+Since zig doesn't have macro it's hard to implement logging with source
+location because we have to pass @src() around.
+But it's possible to make helper for it.
+
+Here is a sample one:
+```zig
+fn logInfoSrc(
+    logger: anytype,
+    comptime src: std.builtin.SourceLocation,
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    const source = std.fmt.comptimePrint("{s}:{s}:{d}:{d}: ", .{
+        src.file,
+        src.fn_name,
+        src.line,
+        src.column,
+    });
+    logger.info(source ++ format, args);
+}
+
+// info: example.zig:main:84:36: Hello, World!
+logInfoSrc(clog.Comptime(.{}), @src(), "Hello, World!", .{});
+```
+
 ## TODO
 - support windows colors
 - support a different config for each files?
+- actually have a good interface for @src (impossible)
