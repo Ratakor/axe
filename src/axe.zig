@@ -663,3 +663,46 @@ test "runtime log with complex config & NO_COLOR unset" {
     );
     list.resize(0) catch unreachable;
 }
+
+test "runtime json log" {
+    const expectEqualStrings = std.testing.expectEqualStrings;
+    var empty_env = std.process.EnvMap.init(std.testing.allocator);
+    defer empty_env.deinit();
+    var list = std.ArrayList(u8).init(std.testing.allocator);
+    defer list.deinit();
+
+    const log = try Runtime(.{
+        .format =
+        \\{"level":"%l",%s"data":%f}
+        \\
+        ,
+        .scope_format =
+        \\"scope":"%",
+        ,
+        .styles = .none,
+        .buffering = false,
+    }).init(std.testing.allocator, &.{list.writer().any()}, &empty_env);
+    defer log.deinit(std.testing.allocator);
+
+    log.debug("\"json log\"", .{});
+    try expectEqualStrings(
+        \\{"level":"debug","data":"json log"}
+        \\
+    , list.items);
+    list.resize(0) catch unreachable;
+
+    log.scoped(.main).info("\"json scoped\"", .{});
+    try expectEqualStrings(
+        \\{"level":"info","scope":"main","data":"json scoped"}
+        \\
+    , list.items);
+    list.resize(0) catch unreachable;
+
+    const data = .{ .a = 42, .b = 3.14 };
+    log.info("{}", .{std.json.fmt(data, .{})});
+    try expectEqualStrings(
+        \\{"level":"info","data":{"a":42,"b":3.14e0}}
+        \\
+    , list.items);
+    list.resize(0) catch unreachable;
+}

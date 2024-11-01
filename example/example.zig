@@ -73,12 +73,11 @@ pub fn main() !void {
     log.warn("this is output to stderr and log.txt", .{});
 
     // json log
-    // it's fairly easy to change "message" to a custom json struct to have a fully structured log
     var json_file = try std.fs.cwd().createFile("log.json", .{});
     defer json_file.close();
     const json_log = try axe.Runtime(.{
         .format =
-        \\{"level":"%l",%s"time":"%t","message":"%f"}
+        \\{"level":"%l",%s"time":"%t","data":%f}
         \\
         ,
         .scope_format =
@@ -89,6 +88,9 @@ pub fn main() !void {
     }).init(allocator, &.{json_file.writer().any()}, &env);
     defer json_log.deinit(allocator);
 
-    json_log.debug("json log", .{});
-    json_log.scoped(.main).info("json scoped", .{});
+    json_log.debug("\"json log\"", .{});
+    json_log.scoped(.main).info("\"json scoped\"", .{});
+    // it's easy to have struct instead of a string as data
+    const data = .{ .a = 42, .b = 3.14 };
+    json_log.info("{}", .{std.json.fmt(data, .{})});
 }
