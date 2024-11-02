@@ -20,15 +20,6 @@ pub fn main() !void {
     var env = try std.process.getEnvMap(allocator);
     defer env.deinit();
 
-    // std.log:
-    // init is technically optional but highly recommened, it's used to check
-    //   color configuration, timezone and to add new writers.
-    // std.log supports all the features of axe.Axe even additional writers, time or custom mutex.
-    try std_log.init(allocator, &.{}, &env);
-    defer std_log.deinit(allocator);
-    std.log.info("std.log.info with axe.Axe(.{{}})", .{});
-    std.log.scoped(.main).warn("this is scoped", .{});
-
     // stdout instead of stderr:
     const stdout_log = axe.Axe(.{
         .format = "[%l]%s: %f\n", // the log format string, default is "%l%s: %f\n"
@@ -48,6 +39,15 @@ pub fn main() !void {
     // no need for init since there is no color, no time and no writer
     stdout_log.debug("Hello, stdout with no colors", .{});
     stdout_log.scoped(.main).err("scoped :)", .{});
+
+    // std.log:
+    // init is technically optional but highly recommened, it's used to check
+    //   color configuration, timezone and to add new writers.
+    // std.log supports all the features of axe.Axe even additional writers, time or custom mutex.
+    try std_log.init(allocator, &.{}, &env);
+    defer std_log.deinit(allocator);
+    std.log.info("std.log.info with axe.Axe(.{{}})", .{});
+    std.log.scoped(.main).warn("this is scoped", .{});
 
     // custom writers:
     var f = try std.fs.cwd().createFile("log.txt", .{});
@@ -93,7 +93,7 @@ pub fn main() !void {
         .scope_format =
         \\"scope":"%",
         ,
-        .stderr = false,
+        .stderr = true,
         .color = .never,
         .time = .{ .gofmt = .rfc3339 },
     });
