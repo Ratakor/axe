@@ -1,8 +1,9 @@
 # Axe 🪓
 
 A fully customizable, drop-in replacement for `std.Options.LogFn` with support
-for multiple file logging, buffering, colors (NO_COLOR supported), JSON, time
-and thread safety (multiple mutex interface available)!
+for multiple file logging, buffering, JSON, time, custom format, colors
+(automatic tty detection, windows support, NO_COLOR support, CLICOLOR_FORCE
+support), and thread safety (multiple mutex interface available)!
 
 ![](screenshot.png)
 
@@ -27,6 +28,9 @@ But it's possible to make helper for it.
 
 Here is a sample one:
 ```zig
+const std = @import("std");
+const Axe = @import("axe").Axe(.{});
+
 fn logInfoSrc(
     logger: anytype,
     comptime src: std.builtin.SourceLocation,
@@ -42,13 +46,15 @@ fn logInfoSrc(
     logger.info(source ++ format, args);
 }
 
-// info: example.zig:main:84:36: Hello, World!
-logInfoSrc(axe.Comptime(.{}), @src(), "Hello, World!", .{});
+pub fn main() !void {
+    try Axe.init(std.heap.page_allocator, &.{}, null);
+    defer Axe.deinit(std.heap.page_allocator);
+
+    // info: example.zig:main:24:21: Hello, World
+    logInfoSrc(Axe, @src(), "Hello, World!", .{});
+}
 ```
 
 ## TODO
 - support a different config for each writers?
 - actually have a good interface for @src (impossible)
-- truncate lines with more than 80-100 columns
-- support windows colors on comptime interface for stdout/stderr
-  - maybe handle stderr and stdio differently than every other writers?

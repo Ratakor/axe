@@ -1,13 +1,16 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const axe = @import("axe");
+
+// TODO: outdated
 
 pub const std_options: std.Options = .{
     .logFn = axe.Comptime(.{
-        .mutex = .{ .global = .{
+        .mutex = .{ .function = .{
             .lock = std.debug.lockStdErr,
             .unlock = std.debug.unlockStdErr,
         } },
-    }).standardLog,
+    }).stdLog,
 };
 
 pub fn main() !void {
@@ -64,7 +67,8 @@ pub fn main() !void {
     // Note that we're using .any() to convert std.io.GenericWriter to std.io.AnyWriter.
     // It is highly recommended to instead implement std.io.AnyWriter because .any()
     //   uses a pointer to the GenericWriter context which could create a dangling pointer.
-    // See below for an example of how to implement std.io.AnyWriter for a file.
+    // See `fileWriter` for an example of how to implement std.io.AnyWriter for a file.
+    // See `arrayListWriter` in axe.zig for another example with ArrayList(u8).
     defer log.deinit(allocator);
 
     log.debug("Hello, runtime! This will have no color if NO_COLOR is defined", .{});
@@ -97,20 +101,32 @@ pub fn main() !void {
 }
 
 fn fileWriter(file: std.fs.File) std.io.AnyWriter {
-    // It's fine to store the handle as a pointer here because it's small enough to fit in.
+    if (builtin.os.tag == .windows) {
+        return fileWriterWindows(file);
+    } else {
+        return fileWriterPosix(file);
+    }
+}
+
+fn fileWriterPosix(file: std.fs.File) std.io.AnyWriter {
+    // It's fine to store the handle as the pointer here because it's small enough to fit in.
     return .{
-        // It's fine to store the context in the pointer because it's small enough to fit in.
-        // For bigger context one could do: `.context = @ptrCast(context),`.
-        // The context should live as long as the writer.
         .context = @ptrFromInt(@as(usize, @intCast(file.handle))),
         .writeFn = struct {
             fn typeErasedWrite(context: *const anyopaque, bytes: []const u8) !usize {
-                // For bigger context one could do:
-                // ```zig
-                // const self: *T = @constCast(@ptrCast(@alignCast(context)));
-                // return self.write(bytes);
-                // ```
                 const self: std.fs.File = .{ .handle = @intCast(@intFromPtr(context)) };
+                return self.write(bytes);
+            }
+        }.typeErasedWrite,
+    };
+}
+
+fn fileWriterWindows(file: std.fs.File) std.io.AnyWriter {
+    return .{
+        .context = file.handle,
+        .writeFn = struct {
+            fn typeErasedWrite(context: *const anyopaque, bytes: []const u8) !usize {
+                const self: std.fs.File = .{ .handle = @constCast(context) };
                 return self.write(bytes);
             }
         }.typeErasedWrite,

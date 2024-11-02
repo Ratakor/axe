@@ -31,8 +31,6 @@ pub const Config = struct {
     styles: Styles = .{},
     /// The text to display for each log level.
     level_text: LevelText = .{},
-    /// The scope to use for the log messages. Ignored for `std.log`.
-    scope: @Type(.enum_literal) = .default,
     /// Outputs logs to stdout.
     stdout: bool = false,
     /// Outputs logs to stderr.
@@ -40,7 +38,7 @@ pub const Config = struct {
     /// Whether to buffer the log messages before writing them.
     buffering: bool = true,
     /// The time format to use for the log messages.
-    /// Not supported on the comptime interface.
+    /// Make sure to add `%t` to `format` to display the time in logs.
     time: union(enum) {
         disabled,
         /// Format based on golang time package.
@@ -49,166 +47,19 @@ pub const Config = struct {
         strftime: []const u8,
     } = .disabled,
     /// The mutex interface to use for the log messages.
-    /// default and custom are not supported on the comptime interface.
     mutex: union(enum) {
         none,
         default,
         custom: type,
-        global: struct {
+        function: struct {
             lock: fn () void,
             unlock: fn () void,
         },
     } = .none,
 };
 
-/// Create a new comptime logger based on the given configuration.
-/// Logging with time is not supported on the comptime interface because it requires allocation.
-/// Windows colors are not supported on the comptime interface because it requires storing an handle.
-pub fn Comptime(comptime config: Config) type {
-    if (config.time != .disabled) {
-        @compileError("Time is not supported on the comptime interface, use Runtime instead.");
-    }
-    switch (config.mutex) {
-        .none, .global => {},
-        .default, .custom => @compileError("Use `global` mutex for comptime logging."),
-    }
-
-    return struct {
-        fn dummy() void {}
-        const lock = switch (config.mutex) {
-            .none => dummy,
-            .global => |g| g.lock,
-            else => unreachable,
-        };
-        const unlock = switch (config.mutex) {
-            .none => dummy,
-            .global => |g| g.unlock,
-            else => unreachable,
-        };
-
-        /// The list of writers to write the log messages to.
-        pub const writers = config.writers;
-
-        /// Returns a scoped logging namespace that logs all messages using the scope
-        /// provided here.
-        pub fn scoped(comptime scope: @Type(.enum_literal)) type {
-            var new_config = config;
-            new_config.scope = scope;
-            return Comptime(new_config);
-        }
-
-        /// Log an error message. This log level is intended to be used
-        /// when something has gone wrong. This might be recoverable or might
-        /// be followed by the program exiting.
-        pub fn err(comptime format: []const u8, args: anytype) void {
-            standardLog(.err, config.scope, format, args);
-        }
-
-        /// Log a warning message. This log level is intended to be used if
-        /// it is uncertain whether something has gone wrong or not, but the
-        /// circumstances would be worth investigating.
-        pub fn warn(comptime format: []const u8, args: anytype) void {
-            standardLog(.warn, config.scope, format, args);
-        }
-
-        /// Log an info message. This log level is intended to be used for
-        /// general messages about the state of the program.
-        pub fn info(comptime format: []const u8, args: anytype) void {
-            standardLog(.info, config.scope, format, args);
-        }
-
-        /// Log a debug message. This log level is intended to be used for
-        /// messages which are only useful for debugging.
-        pub fn debug(comptime format: []const u8, args: anytype) void {
-            standardLog(.debug, config.scope, format, args);
-        }
-
-        /// Drop-in replacement for `std.log.defaultLog`.
-        /// The scope given in `config` will be ignored by the standard log functions.
-        /// ```zig
-        /// pub const std_options: std.Options = .{
-        ///     .logFn = axe.Comptime(.{}).standardLog,
-        /// };
-        /// ```
-        pub fn standardLog(
-            comptime message_level: Level,
-            comptime scope: @Type(.enum_literal),
-            comptime format: []const u8,
-            args: anytype,
-        ) void {
-            if (comptime !std.log.logEnabled(message_level, config.scope)) {
-                return;
-            }
-            const actual_format = comptime parseFormat(message_level, scope, format);
-
-            lock();
-            defer unlock();
-
-            nosuspend {
-                if (config.buffering) {
-                    if (config.stdout) {
-                        var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
-                        bw.writer().print(actual_format, args) catch return;
-                        bw.flush() catch return;
-                    }
-                    if (config.stderr) {
-                        var bw = std.io.bufferedWriter(std.io.getStdErr().writer());
-                        bw.writer().print(actual_format, args) catch return;
-                        bw.flush() catch return;
-                    }
-                } else {
-                    if (config.stdout) {
-                        std.io.getStdOut().writer().print(actual_format, args) catch return;
-                    }
-                    if (config.stderr) {
-                        std.io.getStdErr().writer().print(actual_format, args) catch return;
-                    }
-                }
-            }
-        }
-
-        // TODO: use the same interface as runtime for better compilation time and better handling of levelAsText
-        fn parseFormat(
-            comptime level: Level,
-            comptime scope: @Type(.enum_literal),
-            comptime format: []const u8,
-        ) []const u8 {
-            comptime {
-                var fmt: []const u8 = "";
-                var i: usize = 0;
-                while (i < config.format.len) : (i += 1) {
-                    switch (config.format[i]) {
-                        '%' => {
-                            i += 1;
-                            if (i >= config.format.len) {
-                                @compileError("Missing format specifier after `%`.");
-                            }
-                            switch (config.format[i]) {
-                                'l' => fmt = fmt ++ levelAsText(config, level, switch (config.color) {
-                                    .auto, .always => .escape_codes,
-                                    .never => .no_color,
-                                }),
-                                's' => fmt = fmt ++ parseScopeFormat(config.scope_format, scope),
-                                'f' => fmt = fmt ++ format,
-                                't' => @compileError("Time specifier is not supported on the comptime interface."),
-                                '%' => fmt = fmt ++ "%",
-                                else => @compileError("Unknown format specifier after `%`: `" ++ &[_]u8{config.format[i]} ++ "`."),
-                            }
-                        },
-                        '{' => fmt = fmt ++ "{{",
-                        '}' => fmt = fmt ++ "}}",
-                        else => fmt = fmt ++ &[_]u8{config.format[i]},
-                    }
-                }
-                return fmt;
-            }
-        }
-    };
-}
-
-/// Create a new runtime logger based on the given configuration.
-/// Runtime known writers are provided through the `init` function instead of `config`.
-pub fn Runtime(comptime config: Config) type {
+/// Create a new logger based on the given configuration.
+pub fn Axe(comptime config: Config) type {
     if (config.time == .strftime) comptime {
         var bogus: zeit.Time = .{};
         const void_writer: std.io.GenericWriter(void, error{}, struct {
@@ -220,24 +71,22 @@ pub fn Runtime(comptime config: Config) type {
             @compileError("Invalid strftime format: " ++ @errorName(e));
     };
 
+    // TODO
     const writers_tty_config: std.io.tty.Config = switch (config.color) {
         .always => .escape_codes,
         .auto, .never => .no_color,
     };
 
     return struct {
-        const Self = @This();
-
-        writers: []const std.io.AnyWriter,
-        stdout: if (config.stdout) std.io.tty.Config else void, // TODO: use TtyConfig
-        stderr: if (config.stderr) std.io.tty.Config else void,
-        timezone: if (config.time != .disabled) zeit.TimeZone else void,
-        mutex: if (MutexType) |T| *T else void,
-
-        const MutexType: ?type = switch (config.mutex) {
-            .none, .global => null,
-            .default => if (builtin.single_threaded) null else std.Thread.Mutex,
-            .custom => |T| T,
+        var writers: []const std.io.AnyWriter = &.{};
+        // zig/llvm can't handle this without explicit type
+        var stdout: if (config.stdout) std.io.tty.Config else void = if (config.stdout) .no_color else {}; // TODO: use TtyConfig
+        var stderr: if (config.stderr) std.io.tty.Config else void = if (config.stderr) .no_color else {};
+        var timezone = if (config.time != .disabled) zeit.utc else {};
+        var mutex = switch (config.mutex) {
+            .none, .function => {},
+            .default => if (builtin.single_threaded) {} else std.Thread.Mutex{},
+            .custom => |T| T{},
         };
 
         const TtyConfig = union(enum) {
@@ -252,150 +101,158 @@ pub fn Runtime(comptime config: Config) type {
             return switch (config.color) {
                 .auto => std.io.tty.detectConfig(file),
                 .always => switch (std.io.tty.detectConfig(file)) {
-                        .no_color, .escape_codes => .escape_codes,
-                        .windows_api => |ctx| .{ .windows_api = ctx },
+                    .no_color, .escape_codes => .escape_codes,
+                    .windows_api => |ctx| .{ .windows_api = ctx },
                 },
                 .never => .no_color,
             };
         }
 
-        /// Create a new logger with a different scope.
-        /// The result must not live longer than the parent.
-        /// The result must not be deinitialized.
-        // I think it's better to not make a dupe of the parent to keep the same interface as Comptime.
-        // It's also more efficient and convenient.
-        pub fn scoped(self: Self, comptime scope: @Type(.enum_literal)) T: {
-            var new_config = config;
-            new_config.scope = scope;
-            break :T Runtime(new_config);
-        } {
-            return .{
-                .writers = self.writers,
-                .stdout = self.stdout,
-                .stderr = self.stderr,
-                .timezone = self.timezone,
-                .mutex = self.mutex,
-            };
-        }
-
-        /// Instantiate a new logger.
-        /// `writers` is a list of writers to write the log messages to.
-        /// `writers` will be duplicated so passing `&.{}` is safe.
+        /// Setup timezone and tty configuration for stdout/stderr.
+        /// This function should be called before any logging.
+        /// `additional_writers` is a list of writers to write the log messages to.
+        /// `additional_writers` will be duplicated so passing `&.{}` is safe.
         /// WARNING: Getting an AnyWriter with std.io.GenericWriter.any() is prone to segfaults.
         /// `env` is used to check `TZ` and `TZDIR` for the timezone.
         /// `env` is only used during initialization and is not stored.
         pub fn init(
             allocator: std.mem.Allocator,
-            writers: []const std.io.AnyWriter,
+            additional_writers: []const std.io.AnyWriter,
             env: ?*const std.process.EnvMap,
-        ) !Self {
-            return .{
-                .timezone = if (config.time != .disabled) try zeit.local(allocator, env) else {},
-                .writers = try allocator.dupe(std.io.AnyWriter, writers),
-                .stdout = if (config.stdout) detectTtyConfig(std.io.getStdOut()) else {},
-                .stderr = if (config.stderr) detectTtyConfig(std.io.getStdErr()) else {},
-                .mutex = if (MutexType) |T| mx: {
-                    const mutex = try allocator.create(T);
-                    mutex.* = .{};
-                    break :mx mutex;
-                } else {},
-            };
+        ) !void {
+            if (config.time != .disabled) {
+                timezone = try zeit.local(allocator, env);
+            }
+            writers = try allocator.dupe(std.io.AnyWriter, additional_writers);
+            if (config.stdout) {
+                stdout = detectTtyConfig(std.io.getStdOut());
+            }
+            if (config.stderr) {
+                stderr = detectTtyConfig(std.io.getStdErr());
+            }
         }
 
         /// Deinitialize the logger.
-        /// Must not be called on logger instance that were not created with `init`.
-        pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
+        pub fn deinit(allocator: std.mem.Allocator) void {
             if (config.time != .disabled) {
-                self.timezone.deinit();
+                timezone.deinit();
             }
-            if (MutexType != null) {
-                allocator.destroy(self.mutex);
-            }
-            allocator.free(self.writers);
+            allocator.free(writers);
         }
 
-        /// Log an error message. This log level is intended to be used
-        /// when something has gone wrong. This might be recoverable or might
+        /// Returns a scoped logging namespace that logs all messages using the scope provided.
+        pub fn scoped(comptime scope: @Type(.enum_literal)) type {
+            return struct {
+                /// Log an error message. This log level is intended to be used
+                /// when something has gone wrong. This might be recoverable or might
+                /// be followed by the program exiting.
+                pub fn err(comptime format: []const u8, args: anytype) void {
+                    log(.err, scope, format, args);
+                }
+
+                /// Log a warning message. This log level is intended to be used if
+                /// it is uncertain whether something has gone wrong or not, but the
+                /// circumstances would be worth investigating.
+                pub fn warn(comptime format: []const u8, args: anytype) void {
+                    log(.warn, scope, format, args);
+                }
+
+                /// Log an info message. This log level is intended to be used for
+                /// general messages about the state of the program.
+                pub fn info(comptime format: []const u8, args: anytype) void {
+                    log(.info, scope, format, args);
+                }
+
+                /// Log a debug message. This log level is intended to be used for
+                /// messages which are only useful for debugging.
+                pub fn debug(comptime format: []const u8, args: anytype) void {
+                    log(.debug, scope, format, args);
+                }
+            };
+        }
+
+        /// The default scoped logging namespace.
+        pub const default = scoped(.default);
+
+        /// Log an error message using the default scope. This log level is intended to
+        /// be used when something has gone wrong. This might be recoverable or might
         /// be followed by the program exiting.
-        pub fn err(self: Self, comptime format: []const u8, args: anytype) void {
-            self.innerLog(.err, format, args);
-        }
+        pub const err = default.err;
 
-        /// Log a warning message. This log level is intended to be used if
-        /// it is uncertain whether something has gone wrong or not, but the
-        /// circumstances would be worth investigating.
-        pub fn warn(self: Self, comptime format: []const u8, args: anytype) void {
-            self.innerLog(.warn, format, args);
-        }
+        /// Log a warning message using the default scope. This log level is intended
+        /// to be used if it is uncertain whether something has gone wrong or not, but
+        /// the circumstances would be worth investigating.
+        pub const warn = default.warn;
 
-        /// Log an info message. This log level is intended to be used for
-        /// general messages about the state of the program.
-        pub fn info(self: Self, comptime format: []const u8, args: anytype) void {
-            self.innerLog(.info, format, args);
-        }
+        /// Log an info message using the default scope. This log level is intended to
+        /// be used for general messages about the state of the program.
+        pub const info = default.info;
 
-        /// Log a debug message. This log level is intended to be used for
-        /// messages which are only useful for debugging.
-        pub fn debug(self: Self, comptime format: []const u8, args: anytype) void {
-            self.innerLog(.debug, format, args);
-        }
+        /// Log a debug message using the default scope. This log level is intended to
+        /// be used for messages which are only useful for debugging.
+        pub const debug = default.debug;
 
-        fn innerLog(
-            self: Self,
-            comptime message_level: Level,
+        /// Drop-in replacement for `std.log.defaultLog`.
+        /// ```zig
+        /// const Axe = @import("axe").Axe(.{});
+        /// pub const std_options: std.Options = .{
+        ///     .logFn = Axe.log,
+        /// };
+        /// ```
+        pub fn log(
+            comptime level: Level,
+            comptime scope: @Type(.enum_literal),
             comptime format: []const u8,
             args: anytype,
         ) void {
-            if (comptime !std.log.defaultLogEnabled(message_level)) {
+            if (comptime !std.log.logEnabled(level, scope)) {
                 return;
             }
 
             switch (config.mutex) {
                 .none => {},
-                .global => |g| g.lock(),
-                .default => if (!builtin.single_threaded) self.mutex.lock(),
-                .custom => self.mutex.lock(),
+                .function => |f| f.lock(),
+                .default => if (!builtin.single_threaded) mutex.lock(),
+                .custom => mutex.lock(),
             }
             defer switch (config.mutex) {
                 .none => {},
-                .global => |g| g.unlock(),
-                .default => if (!builtin.single_threaded) self.mutex.unlock(),
-                .custom => self.mutex.unlock(),
+                .function => |f| f.unlock(),
+                .default => if (!builtin.single_threaded) mutex.unlock(),
+                .custom => mutex.unlock(),
             };
 
             const time = if (config.time != .disabled) t: {
-                const now = zeit.instant(.{ .timezone = &self.timezone }) catch unreachable;
+                const now = zeit.instant(.{ .timezone = &timezone }) catch unreachable;
                 break :t now.time();
             } else {};
 
             nosuspend {
                 if (config.buffering) {
-                    for (self.writers) |writer| {
+                    for (writers) |writer| {
                         var bw = std.io.bufferedWriter(writer);
-                        Self.print(bw.writer(), writers_tty_config, time, message_level, format, args);
+                        print(bw.writer(), writers_tty_config, time, level, scope, format, args);
                         bw.flush() catch return;
                     }
                     if (config.stdout) {
                         var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
-                        Self.print(bw.writer(), self.stdout, time, message_level, format, args);
+                        print(bw.writer(), stdout, time, level, scope, format, args);
                         bw.flush() catch return;
                     }
                     if (config.stderr) {
                         var bw = std.io.bufferedWriter(std.io.getStdErr().writer());
-                        Self.print(bw.writer(), self.stderr, time, message_level, format, args);
+                        print(bw.writer(), stderr, time, level, scope, format, args);
                         bw.flush() catch return;
                     }
                 } else {
-                    for (self.writers) |writer| {
-                        Self.print(writer, writers_tty_config, time, message_level, format, args);
+                    for (writers) |writer| {
+                        print(writer, writers_tty_config, time, level, scope, format, args);
                     }
                     if (config.stdout) {
-                        const writer = std.io.getStdOut().writer();
-                        Self.print(writer, self.stdout, time, message_level, format, args);
+                        print(std.io.getStdOut().writer(), stdout, time, level, scope, format, args);
                     }
                     if (config.stderr) {
-                        const writer = std.io.getStdErr().writer();
-                        Self.print(writer, self.stderr, time, message_level, format, args);
+                        print(std.io.getStdErr().writer(), stderr, time, level, scope, format, args);
                     }
                 }
             }
@@ -406,6 +263,7 @@ pub fn Runtime(comptime config: Config) type {
             tty_config: std.io.tty.Config,
             time: if (config.time != .disabled) zeit.Time else void,
             comptime level: Level,
+            comptime scope: @Type(.enum_literal),
             comptime format: []const u8,
             args: anytype,
         ) void {
@@ -420,7 +278,7 @@ pub fn Runtime(comptime config: Config) type {
                 }
                 switch (config.format[i]) {
                     'l' => writer.writeAll(levelAsText(config, level, tty_config)) catch return,
-                    's' => writer.writeAll(comptime parseScopeFormat(config.scope_format, config.scope)) catch return,
+                    's' => writer.writeAll(comptime parseScopeFormat(config.scope_format, scope)) catch return,
                     't' => switch (config.time) {
                         .disabled => @compileError("Time specifier without time format."),
                         .gofmt => |gofmt| time.gofmt(writer, gofmt.fmt) catch return,
@@ -624,7 +482,7 @@ fn parseScopeFormat(comptime format: []const u8, comptime scope: @Type(.enum_lit
 fn arrayListWriter(list: *std.ArrayList(u8)) std.io.AnyWriter {
     return .{
         .context = @ptrCast(list),
-        .writeFn = struct{
+        .writeFn = struct {
             fn typeErasedWrite(context: *const anyopaque, bytes: []const u8) !usize {
                 const self: *std.ArrayList(u8) = @constCast(@ptrCast(@alignCast(context)));
                 try self.appendSlice(bytes);
@@ -639,11 +497,12 @@ test "runtime log without styles" {
     var list = std.ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
 
-    const log = try Runtime(.{
+    const log = Axe(.{
         .styles = .none,
         .stderr = false,
         .buffering = false,
-    }).init(std.testing.allocator, &.{list.writer().any()}, null); // testing with maybe wrong writer
+    });
+    try log.init(std.testing.allocator, &.{list.writer().any()}, null); // testing with maybe wrong writer
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello, {s}!", .{"world"});
@@ -665,7 +524,7 @@ test "runtime log with complex config" {
     defer list.deinit();
     comptime var chameleon: Chameleon = .{};
 
-    const log = try Runtime(.{
+    const log = Axe(.{
         .format = "[%l]%s: %f", // no newline
         .scope_format = " %% %",
         .styles = .{
@@ -685,7 +544,8 @@ test "runtime log with complex config" {
         .buffering = false,
         .time = .disabled, // can't test because it's inconsistent
         .mutex = .default,
-    }).init(std.testing.allocator, &.{arrayListWriter(&list)}, null);
+    });
+    try log.init(std.testing.allocator, &.{arrayListWriter(&list)}, null);
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello, {s}!", .{"world"});
@@ -709,7 +569,7 @@ test "runtime json log" {
     var list = std.ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
 
-    const log = try Runtime(.{
+    const log = Axe(.{
         .format =
         \\{"level":"%l",%s"data":%f}
         \\
@@ -720,7 +580,8 @@ test "runtime json log" {
         .stderr = false,
         .styles = .none,
         .buffering = false,
-    }).init(std.testing.allocator, &.{arrayListWriter(&list)}, null);
+    });
+    try log.init(std.testing.allocator, &.{arrayListWriter(&list)}, null);
     defer log.deinit(std.testing.allocator);
 
     log.debug("\"json log\"", .{});
