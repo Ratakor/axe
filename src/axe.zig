@@ -71,7 +71,6 @@ pub fn Axe(comptime config: Config) type {
             @compileError("Invalid strftime format: " ++ @errorName(e));
     };
 
-    // TODO
     const writers_tty_config: std.io.tty.Config = switch (config.color) {
         .always => .escape_codes,
         .auto, .never => .no_color,
@@ -80,7 +79,7 @@ pub fn Axe(comptime config: Config) type {
     return struct {
         var writers: []const std.io.AnyWriter = &.{};
         // zig/llvm can't handle this without explicit type
-        var stdout: if (config.stdout) std.io.tty.Config else void = if (config.stdout) .no_color else {}; // TODO: use TtyConfig
+        var stdout: if (config.stdout) std.io.tty.Config else void = if (config.stdout) .no_color else {};
         var stderr: if (config.stderr) std.io.tty.Config else void = if (config.stderr) .no_color else {};
         var timezone = if (config.time != .disabled) zeit.utc else {};
         var mutex = switch (config.mutex) {
@@ -88,25 +87,6 @@ pub fn Axe(comptime config: Config) type {
             .default => if (builtin.single_threaded) {} else std.Thread.Mutex{},
             .custom => |T| T{},
         };
-
-        const TtyConfig = union(enum) {
-            no_color,
-            escape_codes,
-            windows_api: if (builtin.os.tag == .windows) ResetAttributes else void,
-
-            const ResetAttributes = u16;
-        };
-
-        fn detectTtyConfig(file: std.fs.File) std.io.tty.Config {
-            return switch (config.color) {
-                .auto => std.io.tty.detectConfig(file),
-                .always => switch (std.io.tty.detectConfig(file)) {
-                    .no_color, .escape_codes => .escape_codes,
-                    .windows_api => |ctx| .{ .windows_api = ctx },
-                },
-                .never => .no_color,
-            };
-        }
 
         /// Setup timezone and tty configuration for stdout/stderr.
         /// This function should be called before any logging.
@@ -125,10 +105,10 @@ pub fn Axe(comptime config: Config) type {
             }
             writers = try allocator.dupe(std.io.AnyWriter, additional_writers);
             if (config.stdout) {
-                stdout = detectTtyConfig(std.io.getStdOut());
+                stdout = detectTtyConfig(config, std.io.getStdOut());
             }
             if (config.stderr) {
-                stderr = detectTtyConfig(std.io.getStdErr());
+                stderr = detectTtyConfig(config, std.io.getStdErr());
             }
         }
 
@@ -232,17 +212,17 @@ pub fn Axe(comptime config: Config) type {
                     for (writers) |writer| {
                         var bw = std.io.bufferedWriter(writer);
                         print(bw.writer(), writers_tty_config, time, level, scope, format, args);
-                        bw.flush() catch return;
+                        bw.flush() catch {};
                     }
                     if (config.stdout) {
                         var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
                         print(bw.writer(), stdout, time, level, scope, format, args);
-                        bw.flush() catch return;
+                        bw.flush() catch {};
                     }
                     if (config.stderr) {
                         var bw = std.io.bufferedWriter(std.io.getStdErr().writer());
                         print(bw.writer(), stderr, time, level, scope, format, args);
-                        bw.flush() catch return;
+                        bw.flush() catch {};
                     }
                 } else {
                     for (writers) |writer| {
@@ -271,27 +251,27 @@ pub fn Axe(comptime config: Config) type {
             inline while (true) {
                 const prev = i;
                 i = comptime std.mem.indexOfScalarPos(u8, config.format, i, '%') orelse break;
-                writer.writeAll(config.format[prev..i]) catch return;
+                writer.writeAll(config.format[prev..i]) catch {};
                 i += 1; // skip '%'
                 if (i >= config.format.len) {
                     @compileError("Missing format specifier after `%`.");
                 }
                 switch (config.format[i]) {
-                    'l' => writer.writeAll(levelAsText(config, level, tty_config)) catch return,
-                    's' => writer.writeAll(comptime parseScopeFormat(config.scope_format, scope)) catch return,
+                    'l' => writer.writeAll(levelAsText(config, level, tty_config)) catch {},
+                    's' => writer.writeAll(comptime parseScopeFormat(config.scope_format, scope)) catch {},
                     't' => switch (config.time) {
                         .disabled => @compileError("Time specifier without time format."),
-                        .gofmt => |gofmt| time.gofmt(writer, gofmt.fmt) catch return,
-                        .strftime => |fmt| time.strftime(writer, fmt) catch return,
+                        .gofmt => |gofmt| time.gofmt(writer, gofmt.fmt) catch {},
+                        .strftime => |fmt| time.strftime(writer, fmt) catch {},
                     },
-                    'f' => writer.print(format, args) catch return,
-                    '%' => writer.writeAll("%") catch return,
+                    'f' => writer.print(format, args) catch {},
+                    '%' => writer.writeAll("%") catch {},
                     else => @compileError("Unknown format specifier after `%`: `" ++ &[_]u8{config.format[i]} ++ "`."),
                 }
                 i += 1; // skip format specifier
             }
             if (i < config.format.len) {
-                writer.writeAll(config.format[i..]) catch return;
+                writer.writeAll(config.format[i..]) catch {};
             }
         }
     };
@@ -435,6 +415,17 @@ pub const GoTimeFormat = struct {
     pub const time_only: GoTimeFormat = .{ .fmt = "15:04:05" };
 };
 
+inline fn detectTtyConfig(comptime config: Config, file: std.fs.File) std.io.tty.Config {
+    return switch (config.color) {
+        .auto => std.io.tty.detectConfig(file),
+        .always => switch (std.io.tty.detectConfig(file)) {
+            .no_color, .escape_codes => .escape_codes,
+            .windows_api => |ctx| .{ .windows_api = ctx },
+        },
+        .never => .no_color,
+    };
+}
+
 fn levelAsText(
     comptime config: Config,
     comptime level: Level,
@@ -451,7 +442,8 @@ fn levelAsText(
         },
         .windows_api => |ctx| {
             _ = ctx;
-            unreachable; // TODO: need to apply attributes, write text, then reset attributes
+            // TODO: need to apply attributes, write text, then reset attributes
+            @panic("Windows API color is not supported yet.");
         },
     }
 }
@@ -477,19 +469,6 @@ fn parseScopeFormat(comptime format: []const u8, comptime scope: @Type(.enum_lit
         }
         return fmt;
     }
-}
-
-fn arrayListWriter(list: *std.ArrayList(u8)) std.io.AnyWriter {
-    return .{
-        .context = @ptrCast(list),
-        .writeFn = struct {
-            fn typeErasedWrite(context: *const anyopaque, bytes: []const u8) !usize {
-                const self: *std.ArrayList(u8) = @constCast(@ptrCast(@alignCast(context)));
-                try self.appendSlice(bytes);
-                return bytes.len;
-            }
-        }.typeErasedWrite,
-    };
 }
 
 test "runtime log without styles" {
@@ -578,7 +557,7 @@ test "runtime json log" {
         \\"scope":"%",
         ,
         .stderr = false,
-        .styles = .none,
+        .color = .never,
         .buffering = false,
     });
     try log.init(std.testing.allocator, &.{arrayListWriter(&list)}, null);
@@ -605,4 +584,17 @@ test "runtime json log" {
         \\
     , list.items);
     list.resize(0) catch unreachable;
+}
+
+fn arrayListWriter(list: *std.ArrayList(u8)) std.io.AnyWriter {
+    return .{
+        .context = @ptrCast(list),
+        .writeFn = struct {
+            fn typeErasedWrite(context: *const anyopaque, bytes: []const u8) !usize {
+                const self: *std.ArrayList(u8) = @constCast(@ptrCast(@alignCast(context)));
+                try self.appendSlice(bytes);
+                return bytes.len;
+            }
+        }.typeErasedWrite,
+    };
 }

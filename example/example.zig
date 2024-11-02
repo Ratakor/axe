@@ -2,15 +2,15 @@ const std = @import("std");
 const builtin = @import("builtin");
 const axe = @import("axe");
 
-// TODO: outdated
-
+const std_log = axe.Axe(.{
+    // this is not necessary but it's used in std.log.defaultLog so we keep it
+    .mutex = .{ .function = .{
+        .lock = std.debug.lockStdErr,
+        .unlock = std.debug.unlockStdErr,
+    } },
+});
 pub const std_options: std.Options = .{
-    .logFn = axe.Comptime(.{
-        .mutex = .{ .function = .{
-            .lock = std.debug.lockStdErr,
-            .unlock = std.debug.unlockStdErr,
-        } },
-    }).stdLog,
+    .logFn = std_log.log,
 };
 
 pub fn main() !void {
@@ -20,34 +20,39 @@ pub fn main() !void {
     var env = try std.process.getEnvMap(allocator);
     defer env.deinit();
 
-    // comptime
-    const comptime_log = axe.Comptime(.{
-        .styles = .none, // colored by default
+    // std.log:
+    // init is technically optional but highly recommened, it's used to check
+    //   color configuration, timezone and to add new writers.
+    // std.log supports all the features of axe.Axe even additional writers, time or custom mutex.
+    try std_log.init(allocator, &.{}, &env);
+    defer std_log.deinit(allocator);
+    std.log.info("std.log.info with axe.Axe(.{{}})", .{});
+    std.log.scoped(.main).warn("this is scoped", .{});
+
+    // stdout instead of stderr:
+    const stdout_log = axe.Axe(.{
         .format = "[%l]%s: %f\n", // the log format string, default is "%l%s: %f\n"
         .scope_format = " ~ %", // % is a placeholder for scope, default is "(%)"
+        .color = .never, // auto by default
+        .styles = .none, // colored by default, useless to change here since color is never
         .level_text = .{ // same as zig by default
             .err = "ErrOr",
             .debug = "DeBuG",
         },
-        // .scope = .main, // scope can also be set here, it will be ignored for std.log
         .stdout = true, // default is false
         .stderr = false, // default is true
         .buffering = true, // default is true
         .time = .disabled, // disabled by default, doesn't work at comptime
         .mutex = .none, // none by default
     });
-    comptime_log.debug("Hello, comptime with no colors", .{});
-    comptime_log.scoped(.main).err("comptime scoped", .{});
+    // no need for init since there is no color, no time and no writer
+    stdout_log.debug("Hello, stdout with no colors", .{});
+    stdout_log.scoped(.main).err("scoped :)", .{});
 
-    // comptime with std.log
-    // std.log supports all the features of axe.Comptime
-    std.log.info("std.log.info with axe.Comptime(.{{}})", .{});
-    std.log.scoped(.main).warn("this is scoped", .{});
-
-    // runtime
+    // custom writers:
     var f = try std.fs.cwd().createFile("log.txt", .{});
     defer f.close();
-    const log = try axe.Runtime(.{
+    const log = axe.Axe(.{
         .format = "%t %l%s: %f\n",
         .scope_format = "@%",
         .styles = .{
@@ -63,23 +68,24 @@ pub fn main() !void {
         },
         .time = .{ .gofmt = .date_time }, // .date_time is a preset but custom format is also possible
         .mutex = .default, // default to std.Thread.Mutex
-    }).init(allocator, &.{f.writer().any()}, &env);
+    });
     // Note that we're using .any() to convert std.io.GenericWriter to std.io.AnyWriter.
     // It is highly recommended to instead implement std.io.AnyWriter because .any()
     //   uses a pointer to the GenericWriter context which could create a dangling pointer.
     // See `fileWriter` for an example of how to implement std.io.AnyWriter for a file.
     // See `arrayListWriter` in axe.zig for another example with ArrayList(u8).
+    try log.init(allocator, &.{f.writer().any()}, &env);
     defer log.deinit(allocator);
 
-    log.debug("Hello, runtime! This will have no color if NO_COLOR is defined", .{});
-    log.info("the time can be formatted like strftime or time.go", .{});
-    log.scoped(.main).err("scope also works at runtime", .{});
-    log.warn("this is output to stderr and log.txt", .{});
+    log.debug("Hello! This will have no color if NO_COLOR is defined or if piped", .{});
+    log.scoped(.main).info("the time can be formatted like strftime or time.go", .{});
+    log.err("this is thread safe!", .{});
+    log.warn("this is output to stderr and log.txt (without colors)", .{});
 
-    // json log
+    // json log:
     var json_file = try std.fs.cwd().createFile("log.json", .{});
     defer json_file.close();
-    const json_log = try axe.Runtime(.{
+    const json_log = axe.Axe(.{
         .format =
         \\{"level":"%l",%s"time":"%t","data":%f}
         \\
@@ -90,7 +96,8 @@ pub fn main() !void {
         .stderr = false,
         .color = .never,
         .time = .{ .gofmt = .rfc3339 },
-    }).init(allocator, &.{fileWriter(json_file)}, &env);
+    });
+    try json_log.init(allocator, &.{fileWriter(json_file)}, &env);
     defer json_log.deinit(allocator);
 
     json_log.debug("\"json log\"", .{});

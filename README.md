@@ -56,5 +56,5 @@ pub fn main() !void {
 ```
 
 ## TODO
-- support a different config for each writers?
+- replace stdout/stderr with files? (see https://github.com/Ratakor/axe/commit/0c55fd3e2f336d2fc801e759fcd5f910cba66792)
 - actually have a good interface for @src (impossible)
