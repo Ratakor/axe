@@ -377,29 +377,30 @@ pub fn Runtime(comptime config: Config) type {
             args: anytype,
         ) void {
             comptime var i: usize = 0;
-            inline while (i < config.format.len) : (i += 1) {
-                switch (config.format[i]) {
-                    '%' => {
-                        i += 1;
-                        if (i >= config.format.len) {
-                            @compileError("Missing format specifier after `%`.");
-                        }
-                        switch (config.format[i]) {
-                            // TODO: support windows colors
-                            'l' => writer.writeAll(levelAsText(config, level, tty_config)) catch return,
-                            's' => writer.writeAll(comptime parseScopeFormat(config.scope_format, config.scope)) catch return,
-                            't' => switch (config.time) {
-                                .disabled => @compileError("Time specifier without time format."),
-                                .gofmt => |gofmt| time.gofmt(writer, gofmt.fmt) catch return,
-                                .strftime => |fmt| time.strftime(writer, fmt) catch return,
-                            },
-                            'f' => writer.print(format, args) catch return,
-                            '%' => writer.writeAll("%") catch return,
-                            else => @compileError("Unknown format specifier after `%`: `" ++ &[_]u8{config.format[i]} ++ "`."),
-                        }
-                    },
-                    else => writer.writeByte(config.format[i]) catch return,
+            inline while (true) {
+                const prev = i;
+                i = comptime std.mem.indexOfScalarPos(u8, config.format, i, '%') orelse break;
+                writer.writeAll(config.format[prev..i]) catch return;
+                i += 1; // skip '%'
+                if (i >= config.format.len) {
+                    @compileError("Missing format specifier after `%`.");
                 }
+                switch (config.format[i]) {
+                    'l' => writer.writeAll(levelAsText(config, level, tty_config)) catch return,
+                    's' => writer.writeAll(comptime parseScopeFormat(config.scope_format, config.scope)) catch return,
+                    't' => switch (config.time) {
+                        .disabled => @compileError("Time specifier without time format."),
+                        .gofmt => |gofmt| time.gofmt(writer, gofmt.fmt) catch return,
+                        .strftime => |fmt| time.strftime(writer, fmt) catch return,
+                    },
+                    'f' => writer.print(format, args) catch return,
+                    '%' => writer.writeAll("%") catch return,
+                    else => @compileError("Unknown format specifier after `%`: `" ++ &[_]u8{config.format[i]} ++ "`."),
+                }
+                i += 1; // skip format specifier
+            }
+            if (i < config.format.len) {
+                writer.writeAll(config.format[i..]) catch return;
             }
         }
 

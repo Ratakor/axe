@@ -51,3 +51,4 @@ logInfoSrc(axe.Comptime(.{}), @src(), "Hello, World!", .{});
 - actually have a good interface for @src (impossible)
 - truncate lines with more than 80-100 columns
 - support windows colors on comptime interface for stdout/stderr
+  - maybe handle stderr and stdio differently than every other writers?
