@@ -19,9 +19,8 @@ pub const Config = struct {
     scope_format: []const u8 = "(%)",
     /// Whether to enable color output.
     color: enum {
-        /// Check for NO_COLOR, CLICOLOR_FORCE and tty support on File.
+        /// Check for NO_COLOR, CLICOLOR_FORCE and tty support on stdout/stderr.
         /// Color output is disabled on other writers.
-        /// This is the same as `always` on the comptime interface.
         auto,
         /// Enable color output on every writers.
         always,
@@ -34,9 +33,10 @@ pub const Config = struct {
     level_text: LevelText = .{},
     /// The scope to use for the log messages. Ignored for `std.log`.
     scope: @Type(.enum_literal) = .default,
-    /// A comptime list of writers to write the log messages to.
-    /// See `Runtime.init` for runtime writers.
-    writers: []const std.io.AnyWriter = &default_writers,
+    /// Outputs logs to stdout.
+    stdout: bool = false,
+    /// Outputs logs to stderr.
+    stderr: bool = true,
     /// Whether to buffer the log messages before writing them.
     buffering: bool = true,
     /// The time format to use for the log messages.
@@ -59,10 +59,6 @@ pub const Config = struct {
             unlock: fn () void,
         },
     } = .none,
-};
-
-const default_writers = [_]std.io.AnyWriter{
-    std.io.getStdErr().writer().any(),
 };
 
 /// Create a new comptime logger based on the given configuration.
@@ -150,19 +146,28 @@ pub fn Comptime(comptime config: Config) type {
 
             nosuspend {
                 if (config.buffering) {
-                    inline for (config.writers) |writer| {
-                        var bw = std.io.bufferedWriter(writer);
+                    if (config.stdout) {
+                        var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
+                        bw.writer().print(actual_format, args) catch return;
+                        bw.flush() catch return;
+                    }
+                    if (config.stderr) {
+                        var bw = std.io.bufferedWriter(std.io.getStdErr().writer());
                         bw.writer().print(actual_format, args) catch return;
                         bw.flush() catch return;
                     }
                 } else {
-                    inline for (config.writers) |writer| {
-                        writer.print(actual_format, args) catch return;
+                    if (config.stdout) {
+                        std.io.getStdOut().writer().print(actual_format, args) catch return;
+                    }
+                    if (config.stderr) {
+                        std.io.getStdErr().writer().print(actual_format, args) catch return;
                     }
                 }
             }
         }
 
+        // TODO: use the same interface as runtime for better compilation time and better handling of levelAsText
         fn parseFormat(
             comptime level: Level,
             comptime scope: @Type(.enum_literal),
@@ -215,12 +220,18 @@ pub fn Runtime(comptime config: Config) type {
             @compileError("Invalid strftime format: " ++ @errorName(e));
     };
 
+    const writers_tty_config: std.io.tty.Config = switch (config.color) {
+        .always => .escape_codes,
+        .auto, .never => .no_color,
+    };
+
     return struct {
         const Self = @This();
 
-        timezone: if (config.time != .disabled) zeit.TimeZone else void,
         writers: []const std.io.AnyWriter,
-        files: []const File,
+        stdout: if (config.stdout) std.io.tty.Config else void, // TODO: use TtyConfig
+        stderr: if (config.stderr) std.io.tty.Config else void,
+        timezone: if (config.time != .disabled) zeit.TimeZone else void,
         mutex: if (MutexType) |T| *T else void,
 
         const MutexType: ?type = switch (config.mutex) {
@@ -229,10 +240,24 @@ pub fn Runtime(comptime config: Config) type {
             .custom => |T| T,
         };
 
-        const File = struct {
-            handle: std.fs.File,
-            config: std.io.tty.Config, // TODO: takes more space than necessary
+        const TtyConfig = union(enum) {
+            no_color,
+            escape_codes,
+            windows_api: if (builtin.os.tag == .windows) ResetAttributes else void,
+
+            const ResetAttributes = u16;
         };
+
+        fn detectTtyConfig(file: std.fs.File) std.io.tty.Config {
+            return switch (config.color) {
+                .auto => std.io.tty.detectConfig(file),
+                .always => switch (std.io.tty.detectConfig(file)) {
+                        .no_color, .escape_codes => .escape_codes,
+                        .windows_api => |ctx| .{ .windows_api = ctx },
+                },
+                .never => .no_color,
+            };
+        }
 
         /// Create a new logger with a different scope.
         /// The result must not live longer than the parent.
@@ -245,9 +270,10 @@ pub fn Runtime(comptime config: Config) type {
             break :T Runtime(new_config);
         } {
             return .{
-                .timezone = self.timezone,
                 .writers = self.writers,
-                .files = self.files,
+                .stdout = self.stdout,
+                .stderr = self.stderr,
+                .timezone = self.timezone,
                 .mutex = self.mutex,
             };
         }
@@ -264,18 +290,17 @@ pub fn Runtime(comptime config: Config) type {
             outputs: anytype,
             env: ?*const std.process.EnvMap,
         ) !Self {
-            var logger: Self = .{
+            return .{
                 .timezone = if (config.time != .disabled) try zeit.local(allocator, env) else {},
-                .writers = undefined,
-                .files = undefined,
+                .writers = try parseOutputs(allocator, outputs),
+                .stdout = if (config.stdout) detectTtyConfig(std.io.getStdOut()) else {},
+                .stderr = if (config.stderr) detectTtyConfig(std.io.getStdErr()) else {},
                 .mutex = if (MutexType) |T| mx: {
                     const mutex = try allocator.create(T);
                     mutex.* = .{};
                     break :mx mutex;
                 } else {},
             };
-            try logger.parseOutputs(allocator, outputs);
-            return logger;
         }
 
         /// Deinitialize the logger.
@@ -288,7 +313,6 @@ pub fn Runtime(comptime config: Config) type {
                 allocator.destroy(self.mutex);
             }
             allocator.free(self.writers);
-            allocator.free(self.files);
         }
 
         /// Log an error message. This log level is intended to be used
@@ -349,20 +373,30 @@ pub fn Runtime(comptime config: Config) type {
                 if (config.buffering) {
                     for (self.writers) |writer| {
                         var bw = std.io.bufferedWriter(writer);
-                        Self.print(bw.writer(), .no_color, time, message_level, format, args);
+                        Self.print(bw.writer(), writers_tty_config, time, message_level, format, args);
                         bw.flush() catch return;
                     }
-                    for (self.files) |file| {
-                        var bw = std.io.bufferedWriter(file.handle.writer().any());
-                        Self.print(bw.writer(), file.config, time, message_level, format, args);
+                    if (config.stdout) {
+                        var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
+                        Self.print(bw.writer(), self.stdout, time, message_level, format, args);
+                        bw.flush() catch return;
+                    }
+                    if (config.stderr) {
+                        var bw = std.io.bufferedWriter(std.io.getStdErr().writer());
+                        Self.print(bw.writer(), self.stderr, time, message_level, format, args);
                         bw.flush() catch return;
                     }
                 } else {
                     for (self.writers) |writer| {
-                        Self.print(writer, .no_color, time, message_level, format, args);
+                        Self.print(writer, writers_tty_config, time, message_level, format, args);
                     }
-                    for (self.files) |file| {
-                        Self.print(file.handle.writer(), file.config, time, message_level, format, args);
+                    if (config.stdout) {
+                        const writer = std.io.getStdOut().writer();
+                        Self.print(writer, self.stdout, time, message_level, format, args);
+                    }
+                    if (config.stderr) {
+                        const writer = std.io.getStdErr().writer();
+                        Self.print(writer, self.stderr, time, message_level, format, args);
                     }
                 }
             }
@@ -404,16 +438,9 @@ pub fn Runtime(comptime config: Config) type {
             }
         }
 
-        inline fn parseOutputs(
-            self: *Self,
-            allocator: std.mem.Allocator,
-            outputs: anytype,
-        ) std.mem.Allocator.Error!void {
+        inline fn parseOutputs(allocator: std.mem.Allocator, outputs: anytype) ![]const std.io.AnyWriter {
             var writers = std.ArrayList(std.io.AnyWriter).init(allocator);
             defer writers.deinit();
-
-            var files = std.ArrayList(File).init(allocator);
-            defer files.deinit();
 
             const T = @TypeOf(outputs);
             switch (@typeInfo(T)) {
@@ -434,20 +461,10 @@ pub fn Runtime(comptime config: Config) type {
                 .@"struct" => |ti| {
                     if (ti.is_tuple) {
                         inline for (ti.fields) |field| {
-                            if (field.type == std.fs.File) {
-                                const file = @field(outputs, field.name);
-                                try files.append(.{ .handle = file, .config = std.io.tty.detectConfig(file) });
-                            } else {
-                                try writers.append(toAnyWriter(@field(outputs, field.name)));
-                            }
+                            try writers.append(toAnyWriter(@field(outputs, field.name)));
                         }
                     } else {
-                        if (T == std.fs.File) {
-                            const file = outputs;
-                            try files.append(.{ .handle = file, .config = std.io.tty.detectConfig(file) });
-                        } else {
-                            try writers.append(toAnyWriter(outputs));
-                        }
+                        try writers.append(toAnyWriter(outputs));
                     }
                 },
                 .void, .undefined, .null => {},
@@ -455,12 +472,7 @@ pub fn Runtime(comptime config: Config) type {
                 else => @compileError("Unsupported outputs type: " ++ @typeName(T)),
             }
 
-            if (writers.items.len == 0 and files.items.len == 0) {
-                self.writers = try allocator.dupe(std.io.AnyWriter, config.writers);
-            } else {
-                self.writers = try writers.toOwnedSlice();
-            }
-            self.files = try files.toOwnedSlice();
+            return writers.toOwnedSlice();
         }
     };
 }
@@ -683,15 +695,14 @@ inline fn toAnyWriter(stream: anytype) std.io.AnyWriter {
 
 test "runtime log without styles" {
     const expectEqualStrings = std.testing.expectEqualStrings;
-    var empty_env = std.process.EnvMap.init(std.testing.allocator);
-    defer empty_env.deinit();
     var list = std.ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
 
     const log = try Runtime(.{
         .styles = .none,
+        .stderr = false,
         .buffering = false,
-    }).init(std.testing.allocator, .{list.writer().any()}, &empty_env); // tuple with std.io.AnyWriter
+    }).init(std.testing.allocator, .{list.writer().any()}, null); // tuple with std.io.AnyWriter
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello, {s}!", .{"world"});
@@ -707,36 +718,8 @@ test "runtime log without styles" {
     list.resize(0) catch unreachable;
 }
 
-test "runtime log with NO_COLOR=1" {
+test "runtime log with complex config" {
     const expectEqualStrings = std.testing.expectEqualStrings;
-    var env = std.process.EnvMap.init(std.testing.allocator);
-    defer env.deinit();
-    try env.put("NO_COLOR", "1");
-    var list = std.ArrayList(u8).init(std.testing.allocator);
-    defer list.deinit();
-
-    const log = try Runtime(.{
-        .buffering = false,
-    }).init(std.testing.allocator, &.{list.writer().any()}, &env); // pointer to tuple with std.io.AnyWriter
-    defer log.deinit(std.testing.allocator);
-
-    log.info("Hello, {s}!", .{"world"});
-    try expectEqualStrings("info: Hello, world!\n", list.items);
-    list.resize(0) catch unreachable;
-
-    log.scoped(.my_scope).warn("", .{});
-    try expectEqualStrings("warning(my_scope): \n", list.items);
-    list.resize(0) catch unreachable;
-
-    log.scoped(.other_scope).err("`{s}` not found: {}", .{ "test.txt", error.FileNotFound });
-    try expectEqualStrings("error(other_scope): `test.txt` not found: error.FileNotFound\n", list.items);
-    list.resize(0) catch unreachable;
-}
-
-test "runtime log with complex config & NO_COLOR unset" {
-    const expectEqualStrings = std.testing.expectEqualStrings;
-    var empty_env = std.process.EnvMap.init(std.testing.allocator);
-    defer empty_env.deinit();
     var list = std.ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
     comptime var chameleon: Chameleon = .{};
@@ -756,10 +739,12 @@ test "runtime log with complex config & NO_COLOR unset" {
             .info = "INFO",
             .debug = "DEBUG",
         },
+        .color = .always,
+        .stderr = false,
         .buffering = false,
         .time = .disabled, // can't test because it's inconsistent
         .mutex = .default,
-    }).init(std.testing.allocator, list.writer().any(), &empty_env);
+    }).init(std.testing.allocator, &.{list.writer().any()}, null); // pointer to tuple with std.io.AnyWriter
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello, {s}!", .{"world"});
@@ -780,8 +765,6 @@ test "runtime log with complex config & NO_COLOR unset" {
 
 test "runtime json log" {
     const expectEqualStrings = std.testing.expectEqualStrings;
-    var empty_env = std.process.EnvMap.init(std.testing.allocator);
-    defer empty_env.deinit();
     var list = std.ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
 
@@ -793,9 +776,10 @@ test "runtime json log" {
         .scope_format =
         \\"scope":"%",
         ,
+        .stderr = false,
         .styles = .none,
         .buffering = false,
-    }).init(std.testing.allocator, list.writer().any(), &empty_env); // std.io.AnyWriter
+    }).init(std.testing.allocator, list.writer().any(), null); // std.io.AnyWriter
     defer log.deinit(std.testing.allocator);
 
     log.debug("\"json log\"", .{});

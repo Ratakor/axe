@@ -27,8 +27,9 @@ pub fn main() !void {
             .debug = "DeBuG",
         },
         // .scope = .main, // scope can also be set here, it will be ignored for std.log
-        .writers = &.{std.io.getStdOut().writer().any()}, // stderr is default
-        .buffering = true, // true by default
+        .stdout = true, // default is false
+        .stderr = false, // default is true
+        .buffering = true, // default is true
         .time = .disabled, // disabled by default, doesn't work at comptime
         .mutex = .none, // none by default
     });
@@ -43,10 +44,6 @@ pub fn main() !void {
     // runtime
     var f = try std.fs.cwd().createFile("log.txt", .{});
     defer f.close();
-    const writers = [_]std.io.AnyWriter{
-        std.io.getStdErr().writer().any(),
-        f.writer().any(),
-    };
     const log = try axe.Runtime(.{
         .format = "%t %l%s: %f\n",
         .scope_format = "@%",
@@ -61,10 +58,9 @@ pub fn main() !void {
             .info = "INFO",
             .debug = "DEBUG",
         },
-        // .writers = &writers, // not possible because f.writer().any() is not comptime
         .time = .{ .gofmt = .date_time }, // .date_time is a preset but custom format is also possible
         .mutex = .default, // default to std.Thread.Mutex
-    }).init(allocator, &writers, &env); // null can be used instead of &env
+    }).init(allocator, &.{f.writer().any()}, &env);
     defer log.deinit(allocator);
 
     log.debug("Hello, runtime! This will have no color if NO_COLOR is defined", .{});
@@ -83,7 +79,8 @@ pub fn main() !void {
         .scope_format =
         \\"scope":"%",
         ,
-        .styles = .none,
+        .stderr = false,
+        .color = .never,
         .time = .{ .gofmt = .rfc3339 },
     }).init(allocator, &.{json_file.writer().any()}, &env);
     defer json_log.deinit(allocator);
