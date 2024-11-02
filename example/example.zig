@@ -61,6 +61,10 @@ pub fn main() !void {
         .time = .{ .gofmt = .date_time }, // .date_time is a preset but custom format is also possible
         .mutex = .default, // default to std.Thread.Mutex
     }).init(allocator, &.{f.writer().any()}, &env);
+    // Note that we're using .any() to convert std.io.GenericWriter to std.io.AnyWriter.
+    // It is highly recommended to instead implement std.io.AnyWriter because .any()
+    //   uses a pointer to the GenericWriter context which could create a dangling pointer.
+    // See below for an example of how to implement std.io.AnyWriter for a file.
     defer log.deinit(allocator);
 
     log.debug("Hello, runtime! This will have no color if NO_COLOR is defined", .{});
@@ -82,7 +86,7 @@ pub fn main() !void {
         .stderr = false,
         .color = .never,
         .time = .{ .gofmt = .rfc3339 },
-    }).init(allocator, &.{json_file.writer().any()}, &env);
+    }).init(allocator, &.{fileWriter(json_file)}, &env);
     defer json_log.deinit(allocator);
 
     json_log.debug("\"json log\"", .{});
@@ -90,4 +94,25 @@ pub fn main() !void {
     // it's easy to have struct instead of a string as data
     const data = .{ .a = 42, .b = 3.14 };
     json_log.info("{}", .{std.json.fmt(data, .{})});
+}
+
+fn fileWriter(file: std.fs.File) std.io.AnyWriter {
+    // It's fine to store the handle as a pointer here because it's small enough to fit in.
+    return .{
+        // It's fine to store the context in the pointer because it's small enough to fit in.
+        // For bigger context one could do: `.context = @ptrCast(context),`.
+        // The context should live as long as the writer.
+        .context = @ptrFromInt(@as(usize, @intCast(file.handle))),
+        .writeFn = struct {
+            fn typeErasedWrite(context: *const anyopaque, bytes: []const u8) !usize {
+                // For bigger context one could do:
+                // ```zig
+                // const self: *T = @constCast(@ptrCast(@alignCast(context)));
+                // return self.write(bytes);
+                // ```
+                const self: std.fs.File = .{ .handle = @intCast(@intFromPtr(context)) };
+                return self.write(bytes);
+            }
+        }.typeErasedWrite,
+    };
 }

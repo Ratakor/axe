@@ -279,20 +279,19 @@ pub fn Runtime(comptime config: Config) type {
         }
 
         /// Instantiate a new logger.
-        /// If `outputs` is supplied it will be used instead of the writers provided through `config`.
-        /// `outputs` can be a tuple, an array, a writer or a struct with a writer method.
-        /// If one of the `outputs` is a file then NO_COLOR, CLICOLOR_FORCE and
-        ///   tty support will be checked if `config.color` is set to `.auto`.
+        /// `writers` is a list of writers to write the log messages to.
+        /// `writers` will be duplicated so passing `&.{}` is safe.
+        /// WARNING: Getting an AnyWriter with std.io.GenericWriter.any() is prone to segfaults.
         /// `env` is used to check `TZ` and `TZDIR` for the timezone.
         /// `env` is only used during initialization and is not stored.
         pub fn init(
             allocator: std.mem.Allocator,
-            outputs: anytype,
+            writers: []const std.io.AnyWriter,
             env: ?*const std.process.EnvMap,
         ) !Self {
             return .{
                 .timezone = if (config.time != .disabled) try zeit.local(allocator, env) else {},
-                .writers = try parseOutputs(allocator, outputs),
+                .writers = try allocator.dupe(std.io.AnyWriter, writers),
                 .stdout = if (config.stdout) detectTtyConfig(std.io.getStdOut()) else {},
                 .stderr = if (config.stderr) detectTtyConfig(std.io.getStdErr()) else {},
                 .mutex = if (MutexType) |T| mx: {
@@ -436,43 +435,6 @@ pub fn Runtime(comptime config: Config) type {
             if (i < config.format.len) {
                 writer.writeAll(config.format[i..]) catch return;
             }
-        }
-
-        inline fn parseOutputs(allocator: std.mem.Allocator, outputs: anytype) ![]const std.io.AnyWriter {
-            var writers = std.ArrayList(std.io.AnyWriter).init(allocator);
-            defer writers.deinit();
-
-            const T = @TypeOf(outputs);
-            switch (@typeInfo(T)) {
-                .pointer => |ti| {
-                    if (ti.size == .One) {
-                        const tic = @typeInfo(ti.child);
-                        if (tic == .@"struct" and tic.@"struct".is_tuple) {
-                            // support for &.{} syntax
-                            inline for (tic.@"struct".fields) |field| {
-                                try writers.append(toAnyWriter(@field(outputs.*, field.name)));
-                            }
-                        }
-                    } else {
-                        @compileError("Unsupported outputs type: " ++ @typeName(T));
-                    }
-                },
-                .array => @compileError("TODO: array"),
-                .@"struct" => |ti| {
-                    if (ti.is_tuple) {
-                        inline for (ti.fields) |field| {
-                            try writers.append(toAnyWriter(@field(outputs, field.name)));
-                        }
-                    } else {
-                        try writers.append(toAnyWriter(outputs));
-                    }
-                },
-                .void, .undefined, .null => {},
-                .optional => @compileError("TODO: optional"),
-                else => @compileError("Unsupported outputs type: " ++ @typeName(T)),
-            }
-
-            return writers.toOwnedSlice();
         }
     };
 }
@@ -659,38 +621,17 @@ fn parseScopeFormat(comptime format: []const u8, comptime scope: @Type(.enum_lit
     }
 }
 
-inline fn genericToAnyWriter(writer: anytype) std.io.AnyWriter {
-    const T = @TypeOf(writer);
-    if (std.meta.hasMethod(T, "any") and @hasField(T, "context")) {
-        // check if context is a pointer to prevent from General Protection Exception
-        // >.any() uses &stream.context which would be a pointer to a pointer to the actual context
-        // >the pointer to the actual context will be undefined once quitting this function
-        // >causing a General Protection Exception when using the produced AnyWriter
-        if (@typeInfo(@TypeOf(writer.context)) == .pointer) {
-            @compileError("Found `GenericWriter` with pointer context: use .any() to convert it to AnyWriter.");
-        }
-        return writer.any();
-    } else {
-        @compileError("Unsupported output type: " ++ @typeName(T));
-    }
-}
-
-inline fn toAnyWriter(stream: anytype) std.io.AnyWriter {
-    const T = @TypeOf(stream);
-    if (T == std.io.AnyWriter) {
-        return stream;
-    } else if (std.meta.hasMethod(T, "writer")) {
-        // std.fs.File, std.ArrayList, std.BoundedArray, ...
-        const writer = stream.writer();
-        if (@TypeOf(writer) == std.io.AnyWriter) {
-            return writer;
-        } else {
-            // probably a std.io.GenericWriter
-            return genericToAnyWriter(writer);
-        }
-    } else {
-        return genericToAnyWriter(stream);
-    }
+fn arrayListWriter(list: *std.ArrayList(u8)) std.io.AnyWriter {
+    return .{
+        .context = @ptrCast(list),
+        .writeFn = struct{
+            fn typeErasedWrite(context: *const anyopaque, bytes: []const u8) !usize {
+                const self: *std.ArrayList(u8) = @constCast(@ptrCast(@alignCast(context)));
+                try self.appendSlice(bytes);
+                return bytes.len;
+            }
+        }.typeErasedWrite,
+    };
 }
 
 test "runtime log without styles" {
@@ -702,7 +643,7 @@ test "runtime log without styles" {
         .styles = .none,
         .stderr = false,
         .buffering = false,
-    }).init(std.testing.allocator, .{list.writer().any()}, null); // tuple with std.io.AnyWriter
+    }).init(std.testing.allocator, &.{list.writer().any()}, null); // testing with maybe wrong writer
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello, {s}!", .{"world"});
@@ -744,7 +685,7 @@ test "runtime log with complex config" {
         .buffering = false,
         .time = .disabled, // can't test because it's inconsistent
         .mutex = .default,
-    }).init(std.testing.allocator, &.{list.writer().any()}, null); // pointer to tuple with std.io.AnyWriter
+    }).init(std.testing.allocator, &.{arrayListWriter(&list)}, null);
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello, {s}!", .{"world"});
@@ -779,7 +720,7 @@ test "runtime json log" {
         .stderr = false,
         .styles = .none,
         .buffering = false,
-    }).init(std.testing.allocator, list.writer().any(), null); // std.io.AnyWriter
+    }).init(std.testing.allocator, &.{arrayListWriter(&list)}, null);
     defer log.deinit(std.testing.allocator);
 
     log.debug("\"json log\"", .{});
