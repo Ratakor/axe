@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const windows = std.os.windows;
 const Chameleon = @import("chameleon").ComptimeChameleon;
 const zeit = @import("zeit");
 
@@ -71,7 +72,7 @@ pub fn Axe(comptime config: Config) type {
             @compileError("Invalid strftime format: " ++ @errorName(e));
     };
 
-    const writers_tty_config: std.io.tty.Config = switch (config.color) {
+    const writers_tty_config: TtyConfig = switch (config.color) {
         .always => .escape_codes,
         .auto, .never => .no_color,
     };
@@ -79,8 +80,8 @@ pub fn Axe(comptime config: Config) type {
     return struct {
         var writers: []const std.io.AnyWriter = &.{};
         // zig/llvm can't handle this without explicit type
-        var stdout: if (config.stdout) std.io.tty.Config else void = if (config.stdout) .no_color else {};
-        var stderr: if (config.stderr) std.io.tty.Config else void = if (config.stderr) .no_color else {};
+        var stdout: if (config.stdout) TtyConfig else void = if (config.stdout) .no_color else {};
+        var stderr: if (config.stderr) TtyConfig else void = if (config.stderr) .no_color else {};
         var timezone = if (config.time != .disabled) zeit.utc else {};
         var mutex = switch (config.mutex) {
             .none, .function => {},
@@ -240,7 +241,7 @@ pub fn Axe(comptime config: Config) type {
 
         inline fn print(
             writer: anytype,
-            tty_config: std.io.tty.Config,
+            tty_config: TtyConfig,
             time: if (config.time != .disabled) zeit.Time else void,
             comptime level: Level,
             comptime scope: @Type(.enum_literal),
@@ -257,7 +258,7 @@ pub fn Axe(comptime config: Config) type {
                     @compileError("Missing format specifier after `%`.");
                 }
                 switch (config.format[i]) {
-                    'l' => writer.writeAll(levelAsText(config, level, tty_config)) catch {},
+                    'l' => writeLevel(writer, config, level, tty_config),
                     's' => writer.writeAll(comptime parseScopeFormat(config.scope_format, scope)) catch {},
                     't' => switch (config.time) {
                         .disabled => @compileError("Time specifier without time format."),
@@ -278,6 +279,7 @@ pub fn Axe(comptime config: Config) type {
 }
 
 pub const Style = union(enum) {
+    reset,
     bold,
     dim,
     italic,
@@ -296,16 +298,16 @@ pub const Style = union(enum) {
     magenta,
     cyan,
     white,
-    black_bright,
+    bright_black,
     gray,
     grey,
-    red_bright,
-    green_bright,
-    yellow_bright,
-    blue_bright,
-    magenta_bright,
-    cyan_bright,
-    white_bright,
+    bright_red,
+    bright_green,
+    bright_yellow,
+    bright_blue,
+    bright_magenta,
+    bright_cyan,
+    bright_white,
     bg_black,
     bg_red,
     bg_green,
@@ -314,32 +316,32 @@ pub const Style = union(enum) {
     bg_magenta,
     bg_cyan,
     bg_white,
-    bg_black_bright,
+    bg_bright_black,
     bg_gray,
     bg_grey,
-    bg_red_bright,
-    bg_green_bright,
-    bg_yellow_bright,
-    bg_blue_bright,
-    bg_magenta_bright,
-    bg_cyan_bright,
-    bg_white_bright,
+    bg_bright_red,
+    bg_bright_green,
+    bg_bright_yellow,
+    bg_bright_blue,
+    bg_bright_magenta,
+    bg_bright_cyan,
+    bg_bright_white,
     rgb: struct { r: u8, g: u8, b: u8 },
     bg_rgb: struct { r: u8, g: u8, b: u8 },
     hex: []const u8,
     bg_hex: []const u8,
 
-    fn apply(chameleon: anytype, style: Style) void {
+    fn apply(style: Style, chameleon: anytype) void {
         _ = switch (style) {
             .double_underline => chameleon.addStyle("doubleUnderline"),
-            .black_bright => chameleon.addStyle("blackBright"),
-            .red_bright => chameleon.addStyle("redBright"),
-            .green_bright => chameleon.addStyle("greenBright"),
-            .yellow_bright => chameleon.addStyle("yellowBright"),
-            .blue_bright => chameleon.addStyle("blueBright"),
-            .magenta_bright => chameleon.addStyle("magentaBright"),
-            .cyan_bright => chameleon.addStyle("cyanBright"),
-            .white_bright => chameleon.addStyle("whiteBright"),
+            .bright_black => chameleon.addStyle("blackBright"),
+            .bright_red => chameleon.addStyle("redBright"),
+            .bright_green => chameleon.addStyle("greenBright"),
+            .bright_yellow => chameleon.addStyle("yellowBright"),
+            .bright_blue => chameleon.addStyle("blueBright"),
+            .bright_magenta => chameleon.addStyle("magentaBright"),
+            .bright_cyan => chameleon.addStyle("cyanBright"),
+            .bright_white => chameleon.addStyle("whiteBright"),
             .bg_black => chameleon.addStyle("bgBlack"),
             .bg_red => chameleon.addStyle("bgRed"),
             .bg_green => chameleon.addStyle("bgGreen"),
@@ -348,20 +350,46 @@ pub const Style = union(enum) {
             .bg_magenta => chameleon.addStyle("bgMagenta"),
             .bg_cyan => chameleon.addStyle("bgCyan"),
             .bg_white => chameleon.addStyle("bgWhite"),
-            .bg_black_bright => chameleon.addStyle("bgBlackBright"),
-            .bg_red_bright => chameleon.addStyle("bgRedBright"),
-            .bg_green_bright => chameleon.addStyle("bgGreenBright"),
-            .bg_yellow_bright => chameleon.addStyle("bgYellowBright"),
-            .bg_blue_bright => chameleon.addStyle("bgBlueBright"),
-            .bg_magenta_bright => chameleon.addStyle("bgMagentaBright"),
-            .bg_cyan_bright => chameleon.addStyle("bgCyanBright"),
-            .bg_white_bright => chameleon.addStyle("bgWhiteBright"),
+            .bg_bright_black => chameleon.addStyle("bgBlackBright"),
+            .bg_bright_red => chameleon.addStyle("bgRedBright"),
+            .bg_bright_green => chameleon.addStyle("bgGreenBright"),
+            .bg_bright_yellow => chameleon.addStyle("bgYellowBright"),
+            .bg_bright_blue => chameleon.addStyle("bgBlueBright"),
+            .bg_bright_magenta => chameleon.addStyle("bgMagentaBright"),
+            .bg_bright_cyan => chameleon.addStyle("bgCyanBright"),
+            .bg_bright_white => chameleon.addStyle("bgWhiteBright"),
             .rgb => |rgb| chameleon.rgb(rgb.r, rgb.g, rgb.b),
             .bg_rgb => |rgb| chameleon.bgRgb(rgb.r, rgb.g, rgb.b),
             .hex => |hex| chameleon.hex(hex),
             .bg_hex => |hex| chameleon.bgHex(hex),
             else => chameleon.addStyle(@tagName(style)),
         };
+    }
+
+    fn applyWindows(style: Style, ctx: TtyConfig.WindowsContext) !void {
+        const attributes = switch (style) {
+            .black => 0,
+            .red => windows.FOREGROUND_RED,
+            .green => windows.FOREGROUND_GREEN,
+            .yellow => windows.FOREGROUND_RED | windows.FOREGROUND_GREEN,
+            .blue => windows.FOREGROUND_BLUE,
+            .magenta => windows.FOREGROUND_RED | windows.FOREGROUND_BLUE,
+            .cyan => windows.FOREGROUND_GREEN | windows.FOREGROUND_BLUE,
+            .white => windows.FOREGROUND_RED | windows.FOREGROUND_GREEN | windows.FOREGROUND_BLUE,
+            .bright_black => windows.FOREGROUND_INTENSITY,
+            .bright_red => windows.FOREGROUND_RED | windows.FOREGROUND_INTENSITY,
+            .bright_green => windows.FOREGROUND_GREEN | windows.FOREGROUND_INTENSITY,
+            .bright_yellow => windows.FOREGROUND_RED | windows.FOREGROUND_GREEN | windows.FOREGROUND_INTENSITY,
+            .bright_blue => windows.FOREGROUND_BLUE | windows.FOREGROUND_INTENSITY,
+            .bright_magenta => windows.FOREGROUND_RED | windows.FOREGROUND_BLUE | windows.FOREGROUND_INTENSITY,
+            .bright_cyan => windows.FOREGROUND_GREEN | windows.FOREGROUND_BLUE | windows.FOREGROUND_INTENSITY,
+            .bright_white, .bold => windows.FOREGROUND_RED | windows.FOREGROUND_GREEN | windows.FOREGROUND_BLUE | windows.FOREGROUND_INTENSITY,
+            // "dim" is not supported using basic character attributes, but let's still make it do *something*.
+            .dim => windows.FOREGROUND_INTENSITY,
+            .reset => ctx.reset_attributes,
+            else => return,
+        };
+        try windows.SetConsoleTextAttribute(ctx.handle, attributes);
     }
 };
 
@@ -415,10 +443,54 @@ pub const GoTimeFormat = struct {
     pub const time_only: GoTimeFormat = .{ .fmt = "15:04:05" };
 };
 
-inline fn detectTtyConfig(comptime config: Config, file: std.fs.File) std.io.tty.Config {
+/// Extracted from std.io.tty
+const TtyConfig = union(enum) {
+    no_color,
+    escape_codes,
+    windows_api: if (builtin.os.tag == .windows) WindowsContext else void,
+
+    const WindowsContext = struct {
+        handle: windows.HANDLE,
+        reset_attributes: windows.WORD,
+    };
+
+    /// Detect suitable TTY configuration options for the given file (commonly stdout/stderr).
+    /// This includes feature checks for ANSI escape codes and the Windows console API, as well as
+    /// respecting the `NO_COLOR` and `CLICOLOR_FORCE` environment variables to override the default.
+    /// Will attempt to enable ANSI escape code support if necessary/possible.
+    fn detectConfig(file: std.fs.File) TtyConfig {
+        const force_color: ?bool = if (builtin.os.tag == .wasi)
+            null // wasi does not support environment variables
+        else if (std.process.hasEnvVarConstant("NO_COLOR"))
+            false
+        else if (std.process.hasEnvVarConstant("CLICOLOR_FORCE"))
+            true
+        else
+            null;
+
+        if (force_color == false) return .no_color;
+
+        if (file.getOrEnableAnsiEscapeSupport()) return .escape_codes;
+
+        if (builtin.os.tag == .windows and file.isTty()) {
+            var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+            if (windows.kernel32.GetConsoleScreenBufferInfo(file.handle, &info) == windows.FALSE) {
+                return if (force_color == true) .escape_codes else .no_color;
+            }
+            return .{ .windows_api = .{
+                .handle = file.handle,
+                .reset_attributes = info.wAttributes,
+            } };
+        }
+
+        return if (force_color == true) .escape_codes else .no_color;
+    }
+};
+
+inline fn detectTtyConfig(comptime config: Config, file: std.fs.File) TtyConfig {
     return switch (config.color) {
-        .auto => std.io.tty.detectConfig(file),
-        .always => switch (std.io.tty.detectConfig(file)) {
+        .auto => TtyConfig.detectConfig(file),
+        .always => switch (TtyConfig.detectConfig(file)) {
             .no_color, .escape_codes => .escape_codes,
             .windows_api => |ctx| .{ .windows_api = ctx },
         },
@@ -426,25 +498,29 @@ inline fn detectTtyConfig(comptime config: Config, file: std.fs.File) std.io.tty
     };
 }
 
-fn levelAsText(
+fn writeLevel(
+    writer: anytype,
     comptime config: Config,
     comptime level: Level,
-    colors: std.io.tty.Config,
-) []const u8 {
-    switch (colors) {
-        .no_color => return comptime @field(config.level_text, @tagName(level)),
+    tty_config: TtyConfig,
+) void {
+    switch (tty_config) {
+        .no_color => writer.writeAll(@field(config.level_text, @tagName(level))) catch {},
         .escape_codes => {
             comptime var chameleon: Chameleon = .{};
             comptime for (@field(config.styles, @tagName(level))) |style| {
-                Style.apply(&chameleon, style);
+                Style.apply(style, &chameleon);
             };
-            return comptime chameleon.fmt(@field(config.level_text, @tagName(level)));
+            const text = comptime chameleon.fmt(@field(config.level_text, @tagName(level)));
+            writer.writeAll(text) catch {};
         },
-        .windows_api => |ctx| {
-            _ = ctx;
-            // TODO: need to apply attributes, write text, then reset attributes
-            @panic("Windows API color is not supported yet.");
-        },
+        .windows_api => |ctx| if (builtin.os.tag == .windows) {
+            inline for (@field(config.styles, @tagName(level))) |style| {
+                Style.applyWindows(style, ctx) catch {};
+            }
+            writer.writeAll(@field(config.level_text, @tagName(level))) catch {};
+            Style.applyWindows(.reset, ctx) catch {};
+        } else unreachable,
     }
 }
 
