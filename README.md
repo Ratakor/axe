@@ -47,7 +47,7 @@ logInfoSrc(axe.Comptime(.{}), @src(), "Hello, World!", .{});
 ```
 
 ## TODO
-- support windows colors
 - support a different config for each writers?
-  - maybe just use std.fs.File.supportsAnsiEscapeCodes instead
 - actually have a good interface for @src (impossible)
+- truncate lines with more than 80-100 columns
+- support windows colors on comptime interface for stdout/stderr

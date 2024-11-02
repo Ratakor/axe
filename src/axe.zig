@@ -17,6 +17,17 @@ pub const Config = struct {
     /// - `%`: The scope name.
     /// - `%%`: A literal `%`.
     scope_format: []const u8 = "(%)",
+    /// Whether to enable color output.
+    color: enum {
+        /// Check for NO_COLOR, CLICOLOR_FORCE and tty support on File.
+        /// Color output is disabled on other writers.
+        /// This is the same as `always` on the comptime interface.
+        auto,
+        /// Enable color output on every writers.
+        always,
+        /// Disable color output on every writers.
+        never,
+    } = .auto,
     /// Set to `.none` to disable all styles.
     styles: Styles = .{},
     /// The text to display for each log level.
@@ -56,6 +67,7 @@ const default_writers = [_]std.io.AnyWriter{
 
 /// Create a new comptime logger based on the given configuration.
 /// Logging with time is not supported on the comptime interface because it requires allocation.
+/// Windows colors are not supported on the comptime interface because it requires storing an handle.
 pub fn Comptime(comptime config: Config) type {
     if (config.time != .disabled) {
         @compileError("Time is not supported on the comptime interface, use Runtime instead.");
@@ -167,7 +179,10 @@ pub fn Comptime(comptime config: Config) type {
                                 @compileError("Missing format specifier after `%`.");
                             }
                             switch (config.format[i]) {
-                                'l' => fmt = fmt ++ levelAsText(level),
+                                'l' => fmt = fmt ++ levelAsText(config, level, switch (config.color) {
+                                    .auto, .always => .escape_codes,
+                                    .never => .no_color,
+                                }),
                                 's' => fmt = fmt ++ parseScopeFormat(config.scope_format, scope),
                                 'f' => fmt = fmt ++ format,
                                 't' => @compileError("Time specifier is not supported on the comptime interface."),
@@ -181,16 +196,6 @@ pub fn Comptime(comptime config: Config) type {
                     }
                 }
                 return fmt;
-            }
-        }
-
-        fn levelAsText(comptime level: Level) []const u8 {
-            comptime {
-                var chameleon: Chameleon = .{};
-                for (@field(config.styles, @tagName(level))) |style| {
-                    Style.apply(&chameleon, style);
-                }
-                return chameleon.fmt(@field(config.level_text, @tagName(level)));
             }
         }
     };
@@ -213,15 +218,20 @@ pub fn Runtime(comptime config: Config) type {
     return struct {
         const Self = @This();
 
-        color_enabled: bool,
         timezone: if (config.time != .disabled) zeit.TimeZone else void,
         writers: []const std.io.AnyWriter,
+        files: []const File,
         mutex: if (MutexType) |T| *T else void,
 
         const MutexType: ?type = switch (config.mutex) {
             .none, .global => null,
             .default => if (builtin.single_threaded) null else std.Thread.Mutex,
             .custom => |T| T,
+        };
+
+        const File = struct {
+            handle: std.fs.File,
+            config: std.io.tty.Config, // TODO: takes more space than necessary
         };
 
         /// Create a new logger with a different scope.
@@ -235,47 +245,37 @@ pub fn Runtime(comptime config: Config) type {
             break :T Runtime(new_config);
         } {
             return .{
-                .color_enabled = self.color_enabled,
                 .timezone = self.timezone,
                 .writers = self.writers,
+                .files = self.files,
                 .mutex = self.mutex,
             };
         }
 
         /// Instantiate a new logger.
-        /// If `writers` is not `null` it will be used instead of the writers provided through `config`.
-        /// If `env_map` is not `null` it will be used instead of `std.process.getEnvMap`.
-        /// `env_map` is only used during initialization and is not stored.
+        /// If `outputs` is supplied it will be used instead of the writers provided through `config`.
+        /// `outputs` can be a tuple, an array, a writer or a struct with a writer method.
+        /// If one of the `outputs` is a file then NO_COLOR, CLICOLOR_FORCE and
+        ///   tty support will be checked if `config.color` is set to `.auto`.
+        /// `env` is used to check `TZ` and `TZDIR` for the timezone.
+        /// `env` is only used during initialization and is not stored.
         pub fn init(
             allocator: std.mem.Allocator,
-            writers: ?[]const std.io.AnyWriter,
-            env_map: ?*const std.process.EnvMap,
+            outputs: anytype,
+            env: ?*const std.process.EnvMap,
         ) !Self {
-            if (env_map) |env| {
-                return initWithEnv(allocator, writers, env);
-            } else {
-                var env = try std.process.getEnvMap(allocator);
-                defer env.deinit();
-                return initWithEnv(allocator, writers, &env);
-            }
-        }
-
-        fn initWithEnv(
-            allocator: std.mem.Allocator,
-            writers: ?[]const std.io.AnyWriter,
-            env_map: *const std.process.EnvMap,
-        ) !Self {
-            const no_color = env_map.get("NO_COLOR");
-            return .{
-                .color_enabled = no_color == null or no_color.?.len == 0,
-                .timezone = if (config.time != .disabled) try zeit.local(allocator, env_map) else {},
-                .writers = try allocator.dupe(std.io.AnyWriter, writers orelse config.writers),
+            var logger: Self = .{
+                .timezone = if (config.time != .disabled) try zeit.local(allocator, env) else {},
+                .writers = undefined,
+                .files = undefined,
                 .mutex = if (MutexType) |T| mx: {
                     const mutex = try allocator.create(T);
                     mutex.* = .{};
                     break :mx mutex;
                 } else {},
             };
+            try logger.parseOutputs(allocator, outputs);
+            return logger;
         }
 
         /// Deinitialize the logger.
@@ -288,6 +288,7 @@ pub fn Runtime(comptime config: Config) type {
                 allocator.destroy(self.mutex);
             }
             allocator.free(self.writers);
+            allocator.free(self.files);
         }
 
         /// Log an error message. This log level is intended to be used
@@ -348,20 +349,28 @@ pub fn Runtime(comptime config: Config) type {
                 if (config.buffering) {
                     for (self.writers) |writer| {
                         var bw = std.io.bufferedWriter(writer);
-                        self.print(bw.writer(), time, message_level, format, args);
+                        Self.print(bw.writer(), .no_color, time, message_level, format, args);
+                        bw.flush() catch return;
+                    }
+                    for (self.files) |file| {
+                        var bw = std.io.bufferedWriter(file.handle.writer().any());
+                        Self.print(bw.writer(), file.config, time, message_level, format, args);
                         bw.flush() catch return;
                     }
                 } else {
                     for (self.writers) |writer| {
-                        self.print(writer, time, message_level, format, args);
+                        Self.print(writer, .no_color, time, message_level, format, args);
+                    }
+                    for (self.files) |file| {
+                        Self.print(file.handle.writer(), file.config, time, message_level, format, args);
                     }
                 }
             }
         }
 
         inline fn print(
-            self: Self,
             writer: anytype,
+            tty_config: std.io.tty.Config,
             time: if (config.time != .disabled) zeit.Time else void,
             comptime level: Level,
             comptime format: []const u8,
@@ -376,7 +385,8 @@ pub fn Runtime(comptime config: Config) type {
                             @compileError("Missing format specifier after `%`.");
                         }
                         switch (config.format[i]) {
-                            'l' => writer.writeAll(levelAsText(level, self.color_enabled)) catch return,
+                            // TODO: support windows colors
+                            'l' => writer.writeAll(levelAsText(config, level, tty_config)) catch return,
                             's' => writer.writeAll(comptime parseScopeFormat(config.scope_format, config.scope)) catch return,
                             't' => switch (config.time) {
                                 .disabled => @compileError("Time specifier without time format."),
@@ -393,15 +403,63 @@ pub fn Runtime(comptime config: Config) type {
             }
         }
 
-        fn levelAsText(comptime level: Level, color_enabled: bool) []const u8 {
-            if (!color_enabled) {
-                return comptime @field(config.level_text, @tagName(level));
+        inline fn parseOutputs(
+            self: *Self,
+            allocator: std.mem.Allocator,
+            outputs: anytype,
+        ) std.mem.Allocator.Error!void {
+            var writers = std.ArrayList(std.io.AnyWriter).init(allocator);
+            defer writers.deinit();
+
+            var files = std.ArrayList(File).init(allocator);
+            defer files.deinit();
+
+            const T = @TypeOf(outputs);
+            switch (@typeInfo(T)) {
+                .pointer => |ti| {
+                    if (ti.size == .One) {
+                        const tic = @typeInfo(ti.child);
+                        if (tic == .@"struct" and tic.@"struct".is_tuple) {
+                            // support for &.{} syntax
+                            inline for (tic.@"struct".fields) |field| {
+                                try writers.append(toAnyWriter(@field(outputs.*, field.name)));
+                            }
+                        }
+                    } else {
+                        @compileError("Unsupported outputs type: " ++ @typeName(T));
+                    }
+                },
+                .array => @compileError("TODO: array"),
+                .@"struct" => |ti| {
+                    if (ti.is_tuple) {
+                        inline for (ti.fields) |field| {
+                            if (field.type == std.fs.File) {
+                                const file = @field(outputs, field.name);
+                                try files.append(.{ .handle = file, .config = std.io.tty.detectConfig(file) });
+                            } else {
+                                try writers.append(toAnyWriter(@field(outputs, field.name)));
+                            }
+                        }
+                    } else {
+                        if (T == std.fs.File) {
+                            const file = outputs;
+                            try files.append(.{ .handle = file, .config = std.io.tty.detectConfig(file) });
+                        } else {
+                            try writers.append(toAnyWriter(outputs));
+                        }
+                    }
+                },
+                .void, .undefined, .null => {},
+                .optional => @compileError("TODO: optional"),
+                else => @compileError("Unsupported outputs type: " ++ @typeName(T)),
             }
-            comptime var chameleon: Chameleon = .{};
-            comptime for (@field(config.styles, @tagName(level))) |style| {
-                Style.apply(&chameleon, style);
-            };
-            return comptime chameleon.fmt(@field(config.level_text, @tagName(level)));
+
+            if (writers.items.len == 0 and files.items.len == 0) {
+                self.writers = try allocator.dupe(std.io.AnyWriter, config.writers);
+            } else {
+                self.writers = try writers.toOwnedSlice();
+            }
+            self.files = try files.toOwnedSlice();
         }
     };
 }
@@ -544,6 +602,27 @@ pub const GoTimeFormat = struct {
     pub const time_only: GoTimeFormat = .{ .fmt = "15:04:05" };
 };
 
+fn levelAsText(
+    comptime config: Config,
+    comptime level: Level,
+    colors: std.io.tty.Config,
+) []const u8 {
+    switch (colors) {
+        .no_color => return comptime @field(config.level_text, @tagName(level)),
+        .escape_codes => {
+            comptime var chameleon: Chameleon = .{};
+            comptime for (@field(config.styles, @tagName(level))) |style| {
+                Style.apply(&chameleon, style);
+            };
+            return comptime chameleon.fmt(@field(config.level_text, @tagName(level)));
+        },
+        .windows_api => |ctx| {
+            _ = ctx;
+            unreachable; // TODO: need to apply attributes, write text, then reset attributes
+        },
+    }
+}
+
 fn parseScopeFormat(comptime format: []const u8, comptime scope: @Type(.enum_literal)) []const u8 {
     comptime {
         if (scope == .default) {
@@ -567,6 +646,40 @@ fn parseScopeFormat(comptime format: []const u8, comptime scope: @Type(.enum_lit
     }
 }
 
+inline fn genericToAnyWriter(writer: anytype) std.io.AnyWriter {
+    const T = @TypeOf(writer);
+    if (std.meta.hasMethod(T, "any") and @hasField(T, "context")) {
+        // check if context is a pointer to prevent from General Protection Exception
+        // >.any() uses &stream.context which would be a pointer to a pointer to the actual context
+        // >the pointer to the actual context will be undefined once quitting this function
+        // >causing a General Protection Exception when using the produced AnyWriter
+        if (@typeInfo(@TypeOf(writer.context)) == .pointer) {
+            @compileError("Found `GenericWriter` with pointer context: use .any() to convert it to AnyWriter.");
+        }
+        return writer.any();
+    } else {
+        @compileError("Unsupported output type: " ++ @typeName(T));
+    }
+}
+
+inline fn toAnyWriter(stream: anytype) std.io.AnyWriter {
+    const T = @TypeOf(stream);
+    if (T == std.io.AnyWriter) {
+        return stream;
+    } else if (std.meta.hasMethod(T, "writer")) {
+        // std.fs.File, std.ArrayList, std.BoundedArray, ...
+        const writer = stream.writer();
+        if (@TypeOf(writer) == std.io.AnyWriter) {
+            return writer;
+        } else {
+            // probably a std.io.GenericWriter
+            return genericToAnyWriter(writer);
+        }
+    } else {
+        return genericToAnyWriter(stream);
+    }
+}
+
 test "runtime log without styles" {
     const expectEqualStrings = std.testing.expectEqualStrings;
     var empty_env = std.process.EnvMap.init(std.testing.allocator);
@@ -577,7 +690,7 @@ test "runtime log without styles" {
     const log = try Runtime(.{
         .styles = .none,
         .buffering = false,
-    }).init(std.testing.allocator, &.{list.writer().any()}, &empty_env);
+    }).init(std.testing.allocator, .{list.writer().any()}, &empty_env); // tuple with std.io.AnyWriter
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello, {s}!", .{"world"});
@@ -603,7 +716,7 @@ test "runtime log with NO_COLOR=1" {
 
     const log = try Runtime(.{
         .buffering = false,
-    }).init(std.testing.allocator, &.{list.writer().any()}, &env);
+    }).init(std.testing.allocator, &.{list.writer().any()}, &env); // pointer to tuple with std.io.AnyWriter
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello, {s}!", .{"world"});
@@ -645,7 +758,7 @@ test "runtime log with complex config & NO_COLOR unset" {
         .buffering = false,
         .time = .disabled, // can't test because it's inconsistent
         .mutex = .default,
-    }).init(std.testing.allocator, &.{list.writer().any()}, &empty_env);
+    }).init(std.testing.allocator, list.writer().any(), &empty_env);
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello, {s}!", .{"world"});
@@ -681,7 +794,7 @@ test "runtime json log" {
         ,
         .styles = .none,
         .buffering = false,
-    }).init(std.testing.allocator, &.{list.writer().any()}, &empty_env);
+    }).init(std.testing.allocator, list.writer().any(), &empty_env); // std.io.AnyWriter
     defer log.deinit(std.testing.allocator);
 
     log.debug("\"json log\"", .{});
