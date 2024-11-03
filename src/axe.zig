@@ -52,10 +52,7 @@ pub const Config = struct {
         none,
         default,
         custom: type,
-        function: struct {
-            lock: fn () void,
-            unlock: fn () void,
-        },
+        function: FunctionMutex,
     } = .none,
 };
 
@@ -441,6 +438,16 @@ pub const GoTimeFormat = struct {
     pub const date_time: GoTimeFormat = .{ .fmt = "2006-01-02 15:04:05" };
     pub const date_only: GoTimeFormat = .{ .fmt = "2006-01-02" };
     pub const time_only: GoTimeFormat = .{ .fmt = "15:04:05" };
+};
+
+pub const FunctionMutex = struct {
+    lock: fn () void,
+    unlock: fn () void,
+
+    pub const progress_stderr: FunctionMutex = .{
+        .lock = std.Progress.lockStdErr,
+        .unlock = std.Progress.unlockStdErr,
+    };
 };
 
 /// Extracted from std.io.tty

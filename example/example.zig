@@ -3,11 +3,9 @@ const builtin = @import("builtin");
 const axe = @import("axe");
 
 const std_log = axe.Axe(.{
-    // this is not necessary but it's used in std.log.defaultLog so we keep it
-    .mutex = .{ .function = .{
-        .lock = std.debug.lockStdErr,
-        .unlock = std.debug.unlockStdErr,
-    } },
+    // .progress_stderr uses std.Progress.[un]lockStdErr
+    // it's not necessary but recommended for a global stderr logger
+    .mutex = .{ .function = .progress_stderr },
 });
 pub const std_options: std.Options = .{
     .logFn = std_log.log,
