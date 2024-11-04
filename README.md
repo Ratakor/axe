@@ -21,5 +21,7 @@ exe.root_module.addImport("axe", axe);
 
 Check [example.zig](example/example.zig) for how to use it!
 
+[API Documentation](https://ratakor.github.io/axe)
+
 ## TODO
 - Add a way to combine multiple loggers into one.

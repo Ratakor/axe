@@ -73,7 +73,7 @@ pub fn Axe(comptime config: Config) type {
     if (config.time_format == .strftime) comptime {
         var bogus: zeit.Time = .{};
         const void_writer: std.io.GenericWriter(void, error{}, struct {
-            pub fn write(_: void, bytes: []const u8) error{}!usize {
+            fn write(_: void, bytes: []const u8) error{}!usize {
                 return bytes.len;
             }
         }.write) = .{ .context = {} };
