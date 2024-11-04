@@ -65,14 +65,17 @@ pub fn Axe(comptime config: Config) type {
             @compileError("Invalid strftime format: " ++ @errorName(e));
     };
 
-    const writers_tty_config: TtyConfig = switch (config.color) {
-        .always => .escape_codes,
-        .auto, .never => .no_color,
+    const default_writers_file: File = .{
+        .handle = undefined,
+        .tty_config = switch (config.color) {
+            .always => .escape_codes,
+            .auto, .never => .no_color,
+        },
     };
 
     return struct {
-        var writers: []const std.io.AnyWriter = &.{};
-        var files: []const File = &.{};
+        var writers: []std.io.AnyWriter = &.{};
+        var files: []File = &.{};
         var timezone = if (config.time != .disabled) zeit.utc else {};
         var mutex = switch (config.mutex) {
             .none, .function => {},
@@ -89,33 +92,34 @@ pub fn Axe(comptime config: Config) type {
         /// `env` is only used during initialization and is not stored.
         pub fn init(
             allocator: std.mem.Allocator,
-            additional_writers: ?[]const std.io.AnyWriter,
-            _files: ?[]const std.fs.File,
+            optional_writers: ?[]const std.io.AnyWriter,
+            optional_files: ?[]const std.fs.File,
             env: ?*const std.process.EnvMap,
         ) !void {
             if (config.time != .disabled) {
                 timezone = try zeit.local(allocator, env);
             }
 
-            if (_files == null and additional_writers == null) {
+            if (optional_files == null and optional_writers == null) {
                 files = try allocator.alloc(File, 1);
                 files[0] = File.init(std.io.getStdErr(), config);
                 return;
             }
 
-            if (_files) |__files| {
-                files = try allocator.alloc(File, __files.len);
-                for (__files, 0..) |file, i| {
+            if (optional_files) |_files| {
+                files = try allocator.alloc(File, _files.len);
+                for (_files, 0..) |file, i| {
                     files[i] = File.init(file, config);
                 }
             }
 
-            if (additional_writers) |_writers| {
+            if (optional_writers) |_writers| {
                 writers = try allocator.dupe(std.io.AnyWriter, _writers);
             }
         }
 
         /// Deinitialize the logger.
+        /// WARNING: After this function is called any logging is undefined behavior.
         pub fn deinit(allocator: std.mem.Allocator) void {
             if (config.time != .disabled) {
                 timezone.deinit();
@@ -215,21 +219,21 @@ pub fn Axe(comptime config: Config) type {
                 if (config.buffering) {
                     for (writers) |writer| {
                         var bw = std.io.bufferedWriter(writer);
-                        print(bw.writer(), writers_tty_config, time, level, scope, format, args);
+                        print(bw.writer(), default_writers_file, time, level, scope, format, args);
                         bw.flush() catch {};
                     }
                     for (files) |file| {
                         var bw = std.io.bufferedWriter(std.fs.File.writer(.{ .handle = file.handle }));
-                        print(bw.writer(), file.tty_config, time, level, scope, format, args);
+                        print(bw.writer(), file, time, level, scope, format, args);
                         bw.flush() catch {};
                     }
                 } else {
                     for (writers) |writer| {
-                        print(writer, writers_tty_config, time, level, scope, format, args);
+                        print(writer, default_writers_file, time, level, scope, format, args);
                     }
                     for (files) |file| {
                         const writer = std.fs.File.writer(.{ .handle = file.handle });
-                        print(writer, file.tty_config, time, level, scope, format, args);
+                        print(writer, file, time, level, scope, format, args);
                     }
                 }
             }
@@ -237,7 +241,7 @@ pub fn Axe(comptime config: Config) type {
 
         inline fn print(
             writer: anytype,
-            tty_config: TtyConfig,
+            file: File,
             time: if (config.time != .disabled) zeit.Time else void,
             comptime level: Level,
             comptime scope: @Type(.enum_literal),
@@ -254,7 +258,24 @@ pub fn Axe(comptime config: Config) type {
                     @compileError("Missing format specifier after `%`.");
                 }
                 switch (config.format[i]) {
-                    'l' => writeLevel(writer, config, level, tty_config),
+                    'l' => switch (file.tty_config) {
+                        .no_color => writer.writeAll(@field(config.level_text, @tagName(level))) catch {},
+                        .escape_codes => {
+                            comptime var chameleon: Chameleon = .{};
+                            comptime for (@field(config.styles, @tagName(level))) |style| {
+                                Style.apply(style, &chameleon);
+                            };
+                            const text = comptime chameleon.fmt(@field(config.level_text, @tagName(level)));
+                            writer.writeAll(text) catch {};
+                        },
+                        .windows_api => |reset_attr| if (builtin.os.tag == .windows) {
+                            inline for (@field(config.styles, @tagName(level))) |style| {
+                                Style.applyWindows(style, file.handle, reset_attr) catch {};
+                            }
+                            writer.writeAll(@field(config.level_text, @tagName(level))) catch {};
+                            Style.applyWindows(.reset, file.handle, reset_attr) catch {};
+                        } else unreachable,
+                    },
                     's' => writer.writeAll(comptime parseScopeFormat(config.scope_format, scope)) catch {},
                     't' => switch (config.time) {
                         .disabled => @compileError("Time specifier without time format."),
@@ -503,34 +524,6 @@ const TtyConfig = union(enum) {
         return if (force_color == true) .escape_codes else .no_color;
     }
 };
-
-fn writeLevel(
-    writer: anytype,
-    // file: File,
-    comptime config: Config,
-    comptime level: Level,
-    tty_config: TtyConfig,
-) void {
-    switch (tty_config) {
-        .no_color => writer.writeAll(@field(config.level_text, @tagName(level))) catch {},
-        .escape_codes => {
-            comptime var chameleon: Chameleon = .{};
-            comptime for (@field(config.styles, @tagName(level))) |style| {
-                Style.apply(style, &chameleon);
-            };
-            const text = comptime chameleon.fmt(@field(config.level_text, @tagName(level)));
-            writer.writeAll(text) catch {};
-        },
-        .windows_api => unreachable,
-        // .windows_api => |reset_attr| if (builtin.os.tag == .windows) {
-        //     inline for (@field(config.styles, @tagName(level))) |style| {
-        //         Style.applyWindows(style, file.handle, reset_attr) catch {};
-        //     }
-        //     writer.writeAll(@field(config.level_text, @tagName(level))) catch {};
-        //     Style.applyWindows(.reset, file.handle, reset_attr) catch {};
-        // } else unreachable,
-    }
-}
 
 fn parseScopeFormat(comptime format: []const u8, comptime scope: @Type(.enum_literal)) []const u8 {
     comptime {

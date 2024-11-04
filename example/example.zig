@@ -28,13 +28,12 @@ pub fn main() !void {
             .err = "ErrOr",
             .debug = "DeBuG",
         },
-        .stdout = true, // default is false
-        .stderr = false, // default is true
         .buffering = true, // default is true
         .time = .disabled, // disabled by default, doesn't work at comptime
         .mutex = .none, // none by default
     });
-    // no need for init since there is no color, no time and no writer
+    try stdout_log.init(allocator, null, &.{std.io.getStdOut()}, &env);
+    defer stdout_log.deinit(allocator);
     stdout_log.debug("Hello, stdout with no colors", .{});
     stdout_log.scoped(.main).err("scoped :)", .{});
 
@@ -42,7 +41,8 @@ pub fn main() !void {
     // init is technically optional but highly recommened, it's used to check
     //   color configuration, timezone and to add new writers.
     // std.log supports all the features of axe.Axe even additional writers, time or custom mutex.
-    try std_log.init(allocator, &.{}, &env);
+    // null writers and null files default to stderr.
+    try std_log.init(allocator, null, null, &env);
     defer std_log.deinit(allocator);
     std.log.info("std.log.info with axe.Axe(.{{}})", .{});
     std.log.scoped(.main).warn("this is scoped", .{});
@@ -72,7 +72,7 @@ pub fn main() !void {
     //   uses a pointer to the GenericWriter context which could create a dangling pointer.
     // See `fileWriter` for an example of how to implement std.io.AnyWriter for a file.
     // See `arrayListWriter` in axe.zig for another example with ArrayList(u8).
-    try log.init(allocator, &.{f.writer().any()}, &env);
+    try log.init(allocator, null, &.{f, std.io.getStdErr()}, &env);
     defer log.deinit(allocator);
 
     log.debug("Hello! This will have no color if NO_COLOR is defined or if piped", .{});
@@ -91,11 +91,10 @@ pub fn main() !void {
         .scope_format =
         \\"scope":"%",
         ,
-        .stderr = true,
         .color = .never,
         .time = .{ .gofmt = .rfc3339 },
     });
-    try json_log.init(allocator, &.{fileWriter(json_file)}, &env);
+    try json_log.init(allocator, null, &.{json_file, std.io.getStdErr()}, &env);
     defer json_log.deinit(allocator);
 
     json_log.debug("\"json log\"", .{});
