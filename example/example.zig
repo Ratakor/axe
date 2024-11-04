@@ -19,6 +19,8 @@ pub fn main() !void {
     defer env.deinit();
 
     // stdout instead of stderr:
+    // note that unless .color is .always no color will be output to stdout
+    // only stderr has automatic color detection
     const stdout_log = axe.Axe(.{
         .format = "[%l]%s: %m\n", // the log format string, default is "%l%s:%L %m\n"
         .scope_format = " ~ %", // % is a placeholder for scope, default is "(%)"
@@ -30,12 +32,12 @@ pub fn main() !void {
             .err = "ErrOr",
             .debug = "DeBuG",
         },
-        .stdout = true, // default is false
-        .stderr = false, // default is true
+        .quiet = true, // disable stderr logging, default is false
         .buffering = true, // default is true
         .mutex = .none, // none by default
     });
-    // no need for init since there is no color, no time and no writer
+    try stdout_log.init(allocator, &.{fileWriter(std.io.getStdOut())}, &env);
+    defer stdout_log.deinit(allocator);
     stdout_log.debug("Hello, stdout with no colors", .{});
     stdout_log.scoped(.main).err("scoped :)", .{});
 
@@ -93,7 +95,6 @@ pub fn main() !void {
         \\"scope":"%",
         ,
         .time_format = .{ .gofmt = .rfc3339 },
-        .stderr = true,
         .color = .never,
     });
     try json_log.init(allocator, &.{fileWriter(json_file)}, &env);

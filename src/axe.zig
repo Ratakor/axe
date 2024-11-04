@@ -1,7 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const windows = std.os.windows;
 const zeit = @import("zeit");
+const windows = std.os.windows;
+const tty = std.io.tty;
 
 pub const Config = struct {
     /// The format to use for the log messages.
@@ -42,7 +43,7 @@ pub const Config = struct {
     } = .disabled,
     /// Whether to enable color output.
     color: enum {
-        /// Check for NO_COLOR, CLICOLOR_FORCE and tty support on stdout/stderr.
+        /// Check for NO_COLOR, CLICOLOR_FORCE and tty support on stderr.
         /// Color output is disabled on other writers.
         auto,
         /// Enable color output on every writers.
@@ -54,10 +55,8 @@ pub const Config = struct {
     styles: Styles = .{},
     /// The text to display for each log level.
     level_text: LevelText = .{},
-    /// Outputs logs to stdout.
-    stdout: bool = false,
-    /// Outputs logs to stderr.
-    stderr: bool = true,
+    /// Whether to write log messages to stderr.
+    quiet: bool = false,
     /// Whether to buffer the log messages before writing them.
     buffering: bool = true,
     /// The mutex interface to use for the log messages.
@@ -82,7 +81,7 @@ pub fn Axe(comptime config: Config) type {
             @compileError("Invalid strftime format: " ++ @errorName(e));
     };
 
-    const writers_tty_config: TtyConfig = switch (config.color) {
+    const writers_tty_config: tty.Config = switch (config.color) {
         .always => .escape_codes,
         .auto, .never => .no_color,
     };
@@ -90,8 +89,7 @@ pub fn Axe(comptime config: Config) type {
     return struct {
         var writers: []const std.io.AnyWriter = &.{};
         // zig/llvm can't handle this without explicit type
-        var stdout: if (config.stdout) TtyConfig else void = if (config.stdout) .no_color else {};
-        var stderr: if (config.stderr) TtyConfig else void = if (config.stderr) .no_color else {};
+        var stderr: if (config.quiet) void else tty.Config = if (config.quiet) {} else .no_color;
         var timezone = if (config.time_format != .disabled) zeit.utc else {};
         var mutex = switch (config.mutex) {
             .none, .function => {},
@@ -99,7 +97,7 @@ pub fn Axe(comptime config: Config) type {
             .custom => |T| T{},
         };
 
-        /// Setup timezone and tty configuration for stdout/stderr.
+        /// Setup timezone and tty configuration for stderr.
         /// This function should be called before any logging.
         /// `additional_writers` is a list of writers to write the log messages to.
         /// `additional_writers` will be duplicated so passing `&.{}` is safe.
@@ -117,16 +115,19 @@ pub fn Axe(comptime config: Config) type {
             if (additional_writers) |_writers| {
                 writers = try allocator.dupe(std.io.AnyWriter, _writers);
             }
-            if (config.stdout) {
-                stdout = detectTtyConfig(config, std.io.getStdOut());
-            }
-            if (config.stderr) {
-                stderr = detectTtyConfig(config, std.io.getStdErr());
+            if (!config.quiet) {
+                stderr = switch (config.color) {
+                    .auto => tty.detectConfig(std.io.getStdErr()),
+                    .always => if (builtin.os.tag == .windows) switch (tty.detectConfig(std.io.getStdErr())) {
+                        .no_color, .escape_codes => .escape_codes,
+                        .windows_api => |ctx| .{ .windows_api = ctx },
+                    } else .escape_codes,
+                    .never => .no_color,
+                };
             }
         }
 
         /// Deinitialize the logger.
-        /// WARNING: After this function is called any logging is undefined behavior.
         pub fn deinit(allocator: std.mem.Allocator) void {
             if (config.time_format != .disabled) {
                 timezone.deinit();
@@ -286,12 +287,7 @@ pub fn Axe(comptime config: Config) type {
                         print(src, bw.writer(), writers_tty_config, time, level, scope, format, args);
                         bw.flush() catch {};
                     }
-                    if (config.stdout) {
-                        var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
-                        print(src, bw.writer(), stdout, time, level, scope, format, args);
-                        bw.flush() catch {};
-                    }
-                    if (config.stderr) {
+                    if (!config.quiet) {
                         var bw = std.io.bufferedWriter(std.io.getStdErr().writer());
                         print(src, bw.writer(), stderr, time, level, scope, format, args);
                         bw.flush() catch {};
@@ -300,10 +296,7 @@ pub fn Axe(comptime config: Config) type {
                     for (writers) |writer| {
                         print(src, writer, writers_tty_config, time, level, scope, format, args);
                     }
-                    if (config.stdout) {
-                        print(src, std.io.getStdOut().writer(), stdout, time, level, scope, format, args);
-                    }
-                    if (config.stderr) {
+                    if (!config.quiet) {
                         print(src, std.io.getStdErr().writer(), stderr, time, level, scope, format, args);
                     }
                 }
@@ -313,7 +306,7 @@ pub fn Axe(comptime config: Config) type {
         inline fn print(
             comptime src: ?std.builtin.SourceLocation,
             writer: anytype,
-            tty_config: TtyConfig,
+            tty_config: tty.Config,
             time: if (config.time_format != .disabled) zeit.Time else void,
             comptime level: Level,
             comptime scope: @Type(.enum_literal),
@@ -541,7 +534,7 @@ pub const Style = union(enum) {
     //     }
     // }
 
-    fn applyWindows(style: Style, ctx: TtyConfig.WindowsContext) !void {
+    fn applyWindows(style: Style, ctx: tty.Config.WindowsContext) !void {
         const attributes = switch (style) {
             .black => 0,
             .red => windows.FOREGROUND_RED,
@@ -636,65 +629,10 @@ pub const FunctionMutex = struct {
     };
 };
 
-/// Extracted from std.io.tty
-const TtyConfig = union(enum) {
-    no_color,
-    escape_codes,
-    windows_api: if (builtin.os.tag == .windows) WindowsContext else void,
-
-    const WindowsContext = struct {
-        handle: windows.HANDLE,
-        reset_attributes: windows.WORD,
-    };
-
-    /// Detect suitable TTY configuration options for the given file (commonly stdout/stderr).
-    /// This includes feature checks for ANSI escape codes and the Windows console API, as well as
-    /// respecting the `NO_COLOR` and `CLICOLOR_FORCE` environment variables to override the default.
-    /// Will attempt to enable ANSI escape code support if necessary/possible.
-    fn detectConfig(file: std.fs.File) TtyConfig {
-        const force_color: ?bool = if (builtin.os.tag == .wasi)
-            null // wasi does not support environment variables
-        else if (std.process.hasEnvVarConstant("NO_COLOR"))
-            false
-        else if (std.process.hasEnvVarConstant("CLICOLOR_FORCE"))
-            true
-        else
-            null;
-
-        if (force_color == false) return .no_color;
-
-        if (file.getOrEnableAnsiEscapeSupport()) return .escape_codes;
-
-        if (builtin.os.tag == .windows and file.isTty()) {
-            var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-            if (windows.kernel32.GetConsoleScreenBufferInfo(file.handle, &info) == windows.FALSE) {
-                return if (force_color == true) .escape_codes else .no_color;
-            }
-            return .{ .windows_api = .{
-                .handle = file.handle,
-                .reset_attributes = info.wAttributes,
-            } };
-        }
-
-        return if (force_color == true) .escape_codes else .no_color;
-    }
-};
-
-inline fn detectTtyConfig(comptime config: Config, file: std.fs.File) TtyConfig {
-    return switch (config.color) {
-        .auto => TtyConfig.detectConfig(file),
-        .always => switch (TtyConfig.detectConfig(file)) {
-            .no_color, .escape_codes => .escape_codes,
-            .windows_api => |ctx| .{ .windows_api = ctx },
-        },
-        .never => .no_color,
-    };
-}
-
 // TODO: return: reset_attr on windows
 fn applyStyle(
     writer: anytype,
-    tty_config: TtyConfig,
+    tty_config: tty.Config,
     comptime styles: []const Style,
 ) []const u8 {
     switch (tty_config) {
@@ -723,7 +661,7 @@ fn writeLevel(
     writer: anytype,
     comptime config: Config,
     comptime level: Level,
-    tty_config: TtyConfig,
+    tty_config: tty.Config,
 ) void {
     switch (tty_config) {
         .no_color => writer.writeAll(@field(config.level_text, @tagName(level))) catch {},
@@ -795,7 +733,7 @@ test "log without styles" {
 
     const log = Axe(.{
         .styles = .none,
-        .stderr = false,
+        .quiet = true,
         .buffering = false,
     });
     try log.init(std.testing.allocator, &.{list.writer().any()}, null); // testing with maybe wrong writer
@@ -837,7 +775,7 @@ test "log with complex config" {
             .debug = "DEBUG",
         },
         .color = .always,
-        .stderr = false,
+        .quiet = true,
         .buffering = false,
         .mutex = .default,
     });
@@ -873,7 +811,7 @@ test "json log" {
         .scope_format =
         \\"scope":"%",
         ,
-        .stderr = false,
+        .quiet = true,
         .color = .never,
         .buffering = false,
     });
