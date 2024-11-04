@@ -20,7 +20,7 @@ pub const Config = struct {
     scope_format: []const u8 = "(%)",
     /// Whether to enable color output.
     color: enum {
-        /// Check for NO_COLOR, CLICOLOR_FORCE and tty support on stdout/stderr.
+        /// Check for NO_COLOR, CLICOLOR_FORCE and tty support on files
         /// Color output is disabled on other writers.
         auto,
         /// Enable color output on every writers.
@@ -32,10 +32,6 @@ pub const Config = struct {
     styles: Styles = .{},
     /// The text to display for each log level.
     level_text: LevelText = .{},
-    /// Outputs logs to stdout.
-    stdout: bool = false,
-    /// Outputs logs to stderr.
-    stderr: bool = true,
     /// Whether to buffer the log messages before writing them.
     buffering: bool = true,
     /// The time format to use for the log messages.
@@ -76,9 +72,7 @@ pub fn Axe(comptime config: Config) type {
 
     return struct {
         var writers: []const std.io.AnyWriter = &.{};
-        // zig/llvm can't handle this without explicit type
-        var stdout: if (config.stdout) TtyConfig else void = if (config.stdout) .no_color else {};
-        var stderr: if (config.stderr) TtyConfig else void = if (config.stderr) .no_color else {};
+        var files: []const File = &.{};
         var timezone = if (config.time != .disabled) zeit.utc else {};
         var mutex = switch (config.mutex) {
             .none, .function => {},
@@ -86,7 +80,7 @@ pub fn Axe(comptime config: Config) type {
             .custom => |T| T{},
         };
 
-        /// Setup timezone and tty configuration for stdout/stderr.
+        /// Setup timezone and tty configuration for files
         /// This function should be called before any logging.
         /// `additional_writers` is a list of writers to write the log messages to.
         /// `additional_writers` will be duplicated so passing `&.{}` is safe.
@@ -95,18 +89,29 @@ pub fn Axe(comptime config: Config) type {
         /// `env` is only used during initialization and is not stored.
         pub fn init(
             allocator: std.mem.Allocator,
-            additional_writers: []const std.io.AnyWriter,
+            additional_writers: ?[]const std.io.AnyWriter,
+            _files: ?[]const std.fs.File,
             env: ?*const std.process.EnvMap,
         ) !void {
             if (config.time != .disabled) {
                 timezone = try zeit.local(allocator, env);
             }
-            writers = try allocator.dupe(std.io.AnyWriter, additional_writers);
-            if (config.stdout) {
-                stdout = detectTtyConfig(config, std.io.getStdOut());
+
+            if (_files == null and additional_writers == null) {
+                files = try allocator.alloc(File, 1);
+                files[0] = File.init(std.io.getStdErr(), config);
+                return;
             }
-            if (config.stderr) {
-                stderr = detectTtyConfig(config, std.io.getStdErr());
+
+            if (_files) |__files| {
+                files = try allocator.alloc(File, __files.len);
+                for (__files, 0..) |file, i| {
+                    files[i] = File.init(file, config);
+                }
+            }
+
+            if (additional_writers) |_writers| {
+                writers = try allocator.dupe(std.io.AnyWriter, _writers);
             }
         }
 
@@ -116,6 +121,7 @@ pub fn Axe(comptime config: Config) type {
                 timezone.deinit();
             }
             allocator.free(writers);
+            allocator.free(files);
         }
 
         /// Returns a scoped logging namespace that logs all messages using the scope provided.
@@ -212,25 +218,18 @@ pub fn Axe(comptime config: Config) type {
                         print(bw.writer(), writers_tty_config, time, level, scope, format, args);
                         bw.flush() catch {};
                     }
-                    if (config.stdout) {
-                        var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
-                        print(bw.writer(), stdout, time, level, scope, format, args);
-                        bw.flush() catch {};
-                    }
-                    if (config.stderr) {
-                        var bw = std.io.bufferedWriter(std.io.getStdErr().writer());
-                        print(bw.writer(), stderr, time, level, scope, format, args);
+                    for (files) |file| {
+                        var bw = std.io.bufferedWriter(std.fs.File.writer(.{ .handle = file.handle }));
+                        print(bw.writer(), file.tty_config, time, level, scope, format, args);
                         bw.flush() catch {};
                     }
                 } else {
                     for (writers) |writer| {
                         print(writer, writers_tty_config, time, level, scope, format, args);
                     }
-                    if (config.stdout) {
-                        print(std.io.getStdOut().writer(), stdout, time, level, scope, format, args);
-                    }
-                    if (config.stderr) {
-                        print(std.io.getStdErr().writer(), stderr, time, level, scope, format, args);
+                    for (files) |file| {
+                        const writer = std.fs.File.writer(.{ .handle = file.handle });
+                        print(writer, file.tty_config, time, level, scope, format, args);
                     }
                 }
             }
@@ -363,7 +362,7 @@ pub const Style = union(enum) {
         };
     }
 
-    fn applyWindows(style: Style, ctx: TtyConfig.WindowsContext) !void {
+    fn applyWindows(style: Style, handle: windows.HANDLE, reset_attributes: windows.WORD) !void {
         const attributes = switch (style) {
             .black => 0,
             .red => windows.FOREGROUND_RED,
@@ -383,10 +382,10 @@ pub const Style = union(enum) {
             .bright_white, .bold => windows.FOREGROUND_RED | windows.FOREGROUND_GREEN | windows.FOREGROUND_BLUE | windows.FOREGROUND_INTENSITY,
             // "dim" is not supported using basic character attributes, but let's still make it do *something*.
             .dim => windows.FOREGROUND_INTENSITY,
-            .reset => ctx.reset_attributes,
+            .reset => reset_attributes,
             else => return,
         };
-        try windows.SetConsoleTextAttribute(ctx.handle, attributes);
+        try windows.SetConsoleTextAttribute(handle, attributes);
     }
 };
 
@@ -450,16 +449,30 @@ pub const FunctionMutex = struct {
     };
 };
 
+const File = struct {
+    handle: std.fs.File.Handle,
+    tty_config: TtyConfig,
+
+    fn init(file: std.fs.File, comptime config: Config) File {
+        return .{
+            .handle = file.handle,
+            .tty_config = switch (config.color) {
+                .auto => TtyConfig.detectConfig(file),
+                .always => switch (TtyConfig.detectConfig(file)) {
+                    .no_color, .escape_codes => .escape_codes,
+                    .windows_api => |attr| .{ .windows_api = attr },
+                },
+                .never => .no_color,
+            },
+        };
+    }
+};
+
 /// Extracted from std.io.tty
 const TtyConfig = union(enum) {
     no_color,
     escape_codes,
-    windows_api: if (builtin.os.tag == .windows) WindowsContext else void,
-
-    const WindowsContext = struct {
-        handle: windows.HANDLE,
-        reset_attributes: windows.WORD,
-    };
+    windows_api: if (builtin.os.tag == .windows) u16 else void,
 
     /// Detect suitable TTY configuration options for the given file (commonly stdout/stderr).
     /// This includes feature checks for ANSI escape codes and the Windows console API, as well as
@@ -484,29 +497,16 @@ const TtyConfig = union(enum) {
             if (windows.kernel32.GetConsoleScreenBufferInfo(file.handle, &info) == windows.FALSE) {
                 return if (force_color == true) .escape_codes else .no_color;
             }
-            return .{ .windows_api = .{
-                .handle = file.handle,
-                .reset_attributes = info.wAttributes,
-            } };
+            return .{ .windows_api = info.wAttributes };
         }
 
         return if (force_color == true) .escape_codes else .no_color;
     }
 };
 
-inline fn detectTtyConfig(comptime config: Config, file: std.fs.File) TtyConfig {
-    return switch (config.color) {
-        .auto => TtyConfig.detectConfig(file),
-        .always => switch (TtyConfig.detectConfig(file)) {
-            .no_color, .escape_codes => .escape_codes,
-            .windows_api => |ctx| .{ .windows_api = ctx },
-        },
-        .never => .no_color,
-    };
-}
-
 fn writeLevel(
     writer: anytype,
+    // file: File,
     comptime config: Config,
     comptime level: Level,
     tty_config: TtyConfig,
@@ -521,13 +521,14 @@ fn writeLevel(
             const text = comptime chameleon.fmt(@field(config.level_text, @tagName(level)));
             writer.writeAll(text) catch {};
         },
-        .windows_api => |ctx| if (builtin.os.tag == .windows) {
-            inline for (@field(config.styles, @tagName(level))) |style| {
-                Style.applyWindows(style, ctx) catch {};
-            }
-            writer.writeAll(@field(config.level_text, @tagName(level))) catch {};
-            Style.applyWindows(.reset, ctx) catch {};
-        } else unreachable,
+        .windows_api => unreachable,
+        // .windows_api => |reset_attr| if (builtin.os.tag == .windows) {
+        //     inline for (@field(config.styles, @tagName(level))) |style| {
+        //         Style.applyWindows(style, file.handle, reset_attr) catch {};
+        //     }
+        //     writer.writeAll(@field(config.level_text, @tagName(level))) catch {};
+        //     Style.applyWindows(.reset, file.handle, reset_attr) catch {};
+        // } else unreachable,
     }
 }
 
@@ -561,7 +562,6 @@ test "runtime log without styles" {
 
     const log = Axe(.{
         .styles = .none,
-        .stderr = false,
         .buffering = false,
     });
     try log.init(std.testing.allocator, &.{list.writer().any()}, null); // testing with maybe wrong writer
@@ -602,7 +602,6 @@ test "runtime log with complex config" {
             .debug = "DEBUG",
         },
         .color = .always,
-        .stderr = false,
         .buffering = false,
         .time = .disabled, // can't test because it's inconsistent
         .mutex = .default,
@@ -639,7 +638,6 @@ test "runtime json log" {
         .scope_format =
         \\"scope":"%",
         ,
-        .stderr = false,
         .color = .never,
         .buffering = false,
     });

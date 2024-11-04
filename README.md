@@ -56,5 +56,6 @@ pub fn main() !void {
 ```
 
 ## TODO
-- replace stdout/stderr with files? (see https://github.com/Ratakor/axe/commit/0c55fd3e2f336d2fc801e759fcd5f910cba66792)
-- actually have a good interface for @src (impossible)
+- Replace stdout/stderr with files? (see [0c55fd3](https://github.com/Ratakor/axe/commit/0c55fd3e2f336d2fc801e759fcd5f910cba66792))
+- Actually have a good interface for @src (impossible)
+- Add a way to combine multiple loggers into one.
