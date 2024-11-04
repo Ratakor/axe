@@ -252,7 +252,7 @@ pub fn Axe(comptime config: Config) type {
         }
 
         fn logAt(
-            comptime src: ?std.builtin.SourceLocation,
+            comptime src: ?std.builtin.SourceLocation, // should this be comptime?
             comptime level: Level,
             comptime scope: @Type(.enum_literal),
             comptime format: []const u8,
@@ -336,12 +336,12 @@ pub fn Axe(comptime config: Config) type {
                         writer.writeAll(comptime parseScopeFormat(config.scope_format, scope)) catch {};
                     },
                     't' => switch (config.time_format) {
-                        .disabled => {}, // ignore for convenience
+                        .disabled => @compileError("Time specifier without time format."),
                         .gofmt => |gofmt| time.gofmt(writer, gofmt.fmt) catch {},
                         .strftime => |fmt| time.strftime(writer, fmt) catch {},
                     },
                     'L' => if (src) |loc| {
-                        writer.writeAll(comptime parseLocFormat(config.loc_format, loc)) catch {};
+                        writeLocation(writer, config.loc_format, loc);
                     },
                     'm' => writer.print(format, args) catch {},
                     '%' => writer.writeAll("%") catch {},
@@ -631,31 +631,31 @@ fn parseScopeFormat(comptime format: []const u8, comptime scope: @Type(.enum_lit
     }
 }
 
-fn parseLocFormat(comptime format: []const u8, comptime loc: std.builtin.SourceLocation) []const u8 {
-    comptime {
-        var text: []const u8 = "";
-        var i: usize = 0;
-        while (i < format.len) : (i += 1) {
-            switch (format[i]) {
-                '%' => {
-                    i += 1; // skip '%'
-                    if (i >= format.len) {
-                        @compileError("Missing loc_format specifier after `%`.");
-                    }
-                    switch (format[i]) {
-                        'm' => text = text ++ loc.module,
-                        'f' => text = text ++ loc.file,
-                        'F' => text = text ++ loc.fn_name,
-                        'l' => text = text ++ std.fmt.comptimePrint("{d}", .{loc.line}),
-                        'c' => text = text ++ std.fmt.comptimePrint("{d}", .{loc.column}),
-                        '%' => text = text ++ "%",
-                        else => @compileError("Unknown loc_format specifier after `%`: `" ++ &[_]u8{format[i]} ++ "`."),
-                    }
-                },
-                else => text = text ++ &[_]u8{format[i]},
-            }
+fn writeLocation(
+    writer: anytype,
+    comptime format: []const u8,
+    loc: std.builtin.SourceLocation,
+) void {
+    comptime var i: usize = 0;
+    inline while (i < format.len) : (i += 1) {
+        switch (format[i]) {
+            '%' => {
+                i += 1; // skip '%'
+                if (i >= format.len) {
+                    @compileError("Missing loc_format specifier after `%`.");
+                }
+                switch (format[i]) {
+                    'm' => writer.writeAll(loc.module) catch {},
+                    'f' => writer.writeAll(loc.file) catch {},
+                    'F' => writer.writeAll(loc.fn_name) catch {},
+                    'l' => writer.print("{d}", .{loc.line}) catch {},
+                    'c' => writer.print("{d}", .{loc.column}) catch {},
+                    '%' => writer.writeAll("%") catch {},
+                    else => @compileError("Unknown loc_format specifier after `%`: `" ++ &[_]u8{format[i]} ++ "`."),
+                }
+            },
+            else => writer.writeByte(format[i]) catch {},
         }
-        return text;
     }
 }
 
