@@ -24,4 +24,3 @@ Check [example.zig](example/example.zig) for how to use it!
 ## TODO
 - Replace stdout/stderr with files?
 - Add a way to combine multiple loggers into one.
-- Add support for style on everywhere.

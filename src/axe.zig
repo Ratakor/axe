@@ -1,7 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const windows = std.os.windows;
-const Chameleon = @import("chameleon").ComptimeChameleon;
 const zeit = @import("zeit");
 
 pub const Config = struct {
@@ -31,7 +30,7 @@ pub const Config = struct {
     /// - `%l`: The line number.
     /// - `%c`: The column number.
     /// - `%%`: A literal `%`.
-    loc_format: []const u8 = " %f:%F:%l:%c:",
+    loc_format: []const u8 = " %f:%l:",
     /// The time format to use for the log messages.
     /// Make sure to add `%t` to `format` to display the time in logs.
     time_format: union(enum) {
@@ -333,17 +332,29 @@ pub fn Axe(comptime config: Config) type {
                 switch (config.format[i]) {
                     'l' => writeLevel(writer, config, level, tty_config),
                     's' => if (scope != .default) {
+                        const close = applyStyle(writer, tty_config, config.styles.scope);
+                        defer writer.writeAll(close) catch {};
                         writer.writeAll(comptime parseScopeFormat(config.scope_format, scope)) catch {};
                     },
-                    't' => switch (config.time_format) {
-                        .disabled => @compileError("Time specifier without time format."),
-                        .gofmt => |gofmt| time.gofmt(writer, gofmt.fmt) catch {},
-                        .strftime => |fmt| time.strftime(writer, fmt) catch {},
+                    't' => {
+                        const close = applyStyle(writer, tty_config, config.styles.time);
+                        defer writer.writeAll(close) catch {};
+                        switch (config.time_format) {
+                            .disabled => @compileError("Time specifier without time format."),
+                            .gofmt => |gofmt| time.gofmt(writer, gofmt.fmt) catch {},
+                            .strftime => |fmt| time.strftime(writer, fmt) catch {},
+                        }
                     },
                     'L' => if (src) |loc| {
+                        const close = applyStyle(writer, tty_config, config.styles.loc);
+                        defer writer.writeAll(close) catch {};
                         writeLocation(writer, config.loc_format, loc);
                     },
-                    'm' => writer.print(format, args) catch {},
+                    'm' => {
+                        const close = applyStyle(writer, tty_config, config.styles.message);
+                        defer writer.writeAll(close) catch {};
+                        writer.print(format, args) catch {};
+                    },
                     '%' => writer.writeAll("%") catch {},
                     else => @compileError("Unknown format specifier after `%`: `" ++ &[_]u8{config.format[i]} ++ "`."),
                 }
@@ -406,43 +417,129 @@ pub const Style = union(enum) {
     bg_bright_white,
     rgb: struct { r: u8, g: u8, b: u8 },
     bg_rgb: struct { r: u8, g: u8, b: u8 },
+    /// #RRGGBB, #RGB, RRGGBB, RGB
     hex: []const u8,
     bg_hex: []const u8,
 
-    fn apply(style: Style, chameleon: anytype) void {
-        _ = switch (style) {
-            .double_underline => chameleon.addStyle("doubleUnderline"),
-            .bright_black => chameleon.addStyle("blackBright"),
-            .bright_red => chameleon.addStyle("redBright"),
-            .bright_green => chameleon.addStyle("greenBright"),
-            .bright_yellow => chameleon.addStyle("yellowBright"),
-            .bright_blue => chameleon.addStyle("blueBright"),
-            .bright_magenta => chameleon.addStyle("magentaBright"),
-            .bright_cyan => chameleon.addStyle("cyanBright"),
-            .bright_white => chameleon.addStyle("whiteBright"),
-            .bg_black => chameleon.addStyle("bgBlack"),
-            .bg_red => chameleon.addStyle("bgRed"),
-            .bg_green => chameleon.addStyle("bgGreen"),
-            .bg_yellow => chameleon.addStyle("bgYellow"),
-            .bg_blue => chameleon.addStyle("bgBlue"),
-            .bg_magenta => chameleon.addStyle("bgMagenta"),
-            .bg_cyan => chameleon.addStyle("bgCyan"),
-            .bg_white => chameleon.addStyle("bgWhite"),
-            .bg_bright_black => chameleon.addStyle("bgBlackBright"),
-            .bg_bright_red => chameleon.addStyle("bgRedBright"),
-            .bg_bright_green => chameleon.addStyle("bgGreenBright"),
-            .bg_bright_yellow => chameleon.addStyle("bgYellowBright"),
-            .bg_bright_blue => chameleon.addStyle("bgBlueBright"),
-            .bg_bright_magenta => chameleon.addStyle("bgMagentaBright"),
-            .bg_bright_cyan => chameleon.addStyle("bgCyanBright"),
-            .bg_bright_white => chameleon.addStyle("bgWhiteBright"),
-            .rgb => |rgb| chameleon.rgb(rgb.r, rgb.g, rgb.b),
-            .bg_rgb => |rgb| chameleon.bgRgb(rgb.r, rgb.g, rgb.b),
-            .hex => |hex| chameleon.hex(hex),
-            .bg_hex => |hex| chameleon.bgHex(hex),
-            else => chameleon.addStyle(@tagName(style)),
+    inline fn fmt(comptime styles: []const Style, comptime text: []const u8) []const u8 {
+        comptime {
+            var open: []const u8 = "";
+            var close: []const u8 = "";
+            for (styles) |style| {
+                const esc = wrap(style.values());
+                open = open ++ esc[0];
+                close = esc[1] ++ close;
+            }
+            return open ++ text ++ close;
+        }
+    }
+
+    fn wrap(comptime style: [2][]const u8) [2][]const u8 {
+        const csi = "\x1b[";
+        return [2][]const u8{
+            csi ++ style[0] ++ "m",
+            csi ++ style[1] ++ "m",
         };
     }
+
+    fn values(comptime style: Style) [2][]const u8 {
+        return comptime switch (style) {
+            .reset => [2][]const u8{ "0", "0" },
+            .bold => [2][]const u8{ "1", "22" },
+            .dim => [2][]const u8{ "2", "22" },
+            .italic => [2][]const u8{ "3", "23" },
+            .underline => [_][]const u8{ "4", "24" },
+            .blink => [2][]const u8{ "5", "25" },
+            .inverse => [2][]const u8{ "7", "27" },
+            .hidden => [2][]const u8{ "8", "28" },
+            .strikethrough => [2][]const u8{ "9", "29" },
+            .double_underline => [2][]const u8{ "21", "24" },
+            .overline => [2][]const u8{ "53", "55" },
+
+            .black => [2][]const u8{ "30", "39" },
+            .red => [2][]const u8{ "31", "39" },
+            .green => [2][]const u8{ "32", "39" },
+            .yellow => [2][]const u8{ "33", "39" },
+            .blue => [2][]const u8{ "34", "39" },
+            .magenta => [2][]const u8{ "35", "39" },
+            .cyan => [2][]const u8{ "36", "39" },
+            .white => [2][]const u8{ "37", "39" },
+
+            .bright_black, .gray, .grey => [2][]const u8{ "90", "39" },
+            .bright_red => [2][]const u8{ "91", "39" },
+            .bright_green => [2][]const u8{ "92", "39" },
+            .bright_yellow => [2][]const u8{ "93", "39" },
+            .bright_blue => [2][]const u8{ "94", "39" },
+            .bright_magenta => [2][]const u8{ "95", "39" },
+            .bright_cyan => [2][]const u8{ "96", "39" },
+            .bright_white => [2][]const u8{ "97", "39" },
+
+            .bg_black => [2][]const u8{ "40", "49" },
+            .bg_red => [2][]const u8{ "41", "49" },
+            .bg_green => [2][]const u8{ "42", "49" },
+            .bg_yellow => [2][]const u8{ "43", "49" },
+            .bg_blue => [2][]const u8{ "44", "49" },
+            .bg_magenta => [2][]const u8{ "45", "49" },
+            .bg_cyan => [2][]const u8{ "46", "49" },
+            .bg_white => [2][]const u8{ "47", "49" },
+
+            .bg_bright_black, .bg_gray, .bg_grey => [2][]const u8{ "100", "49" },
+            .bg_bright_red => [2][]const u8{ "101", "49" },
+            .bg_bright_green => [2][]const u8{ "102", "49" },
+            .bg_bright_yellow => [2][]const u8{ "103", "49" },
+            .bg_bright_blue => [2][]const u8{ "104", "49" },
+            .bg_bright_magenta => [2][]const u8{ "105", "49" },
+            .bg_bright_cyan => [2][]const u8{ "106", "49" },
+            .bg_bright_white => [2][]const u8{ "107", "49" },
+
+            .rgb => |rgb| [2][]const u8{
+                "38;2;" ++ std.fmt.comptimePrint("{d};{d};{d}", .{ rgb.r, rgb.g, rgb.b }),
+                "39",
+            },
+            .bg_rgb => |rgb| [2][]const u8{
+                "48;2;" ++ std.fmt.comptimePrint("{d};{d};{d}", .{ rgb.r, rgb.g, rgb.b }),
+                "49",
+            },
+            .hex => |hex| [2][]const u8{
+                "38;2;" ++ rgbFromHex(hex),
+                "39",
+            },
+            .bg_hex => |hex| [2][]const u8{
+                "48;2;" ++ rgbFromHex(hex),
+                "49",
+            },
+        };
+    }
+
+    fn rgbFromHex(comptime hex_code: []const u8) []const u8 {
+        comptime {
+            const hex = if (hex_code[0] == '#') hex_code[1..] else hex_code;
+            const hex_final = if (hex.len == 3)
+                &[6]u8{ hex[0], hex[0], hex[1], hex[1], hex[2], hex[2] }
+            else
+                hex;
+            if (hex_final.len != 6) {
+                @compileError("Invalid hex color code length.");
+            }
+            const hex_int = std.fmt.parseUnsigned(u32, hex_final, 16) catch |err|
+                @compileError("Invalid hex color code: " ++ @errorName(err));
+            return std.fmt.comptimePrint("{d};{d};{d}", .{
+                (hex_int >> 16) & 0xff,
+                (hex_int >> 8) & 0xff,
+                hex_int & 0xff,
+            });
+        }
+    }
+
+    // TODO
+    // fn apply(style: Style, ctx: anytype) void {
+    //     if (builtin.os.tag == .windows) {
+    //         return applyWindows(style, ctx);
+    //     } else {
+    //         const close = applyStyle(ctx, TtyConfig.escape_codes, &.[style]);
+    //         defer ctx.writeAll(close) catch {
+    //     }
+    // }
 
     fn applyWindows(style: Style, ctx: TtyConfig.WindowsContext) !void {
         const attributes = switch (style) {
@@ -476,12 +573,20 @@ pub const Styles = struct {
     warn: []const Style = &.{ .bold, .yellow },
     info: []const Style = &.{ .bold, .blue },
     debug: []const Style = &.{ .bold, .cyan },
+    scope: []const Style = &.{},
+    time: []const Style = &.{.white},
+    loc: []const Style = &.{.dim},
+    message: []const Style = &.{},
 
     pub const none: Styles = .{
         .err = &.{},
         .warn = &.{},
         .info = &.{},
         .debug = &.{},
+        .scope = &.{},
+        .time = &.{},
+        .loc = &.{},
+        .message = &.{},
     };
 };
 
@@ -586,6 +691,34 @@ inline fn detectTtyConfig(comptime config: Config, file: std.fs.File) TtyConfig 
     };
 }
 
+// TODO: return: reset_attr on windows
+fn applyStyle(
+    writer: anytype,
+    tty_config: TtyConfig,
+    comptime styles: []const Style,
+) []const u8 {
+    switch (tty_config) {
+        .no_color => return "",
+        .escape_codes => {
+            comptime var open: []const u8 = "";
+            comptime var close: []const u8 = "";
+            comptime for (styles) |style| {
+                const esc = Style.wrap(style.values());
+                open = open ++ esc[0];
+                close = esc[1] ++ close;
+            };
+            writer.writeAll(open) catch {};
+            return close;
+        },
+        .windows_api => |ctx| if (builtin.os.tag == .windows) {
+            inline for (styles) |style| {
+                Style.applyWindows(style, ctx) catch {};
+            }
+            return "";
+        } else unreachable,
+    }
+}
+
 fn writeLevel(
     writer: anytype,
     comptime config: Config,
@@ -594,14 +727,10 @@ fn writeLevel(
 ) void {
     switch (tty_config) {
         .no_color => writer.writeAll(@field(config.level_text, @tagName(level))) catch {},
-        .escape_codes => {
-            comptime var chameleon: Chameleon = .{};
-            comptime for (@field(config.styles, @tagName(level))) |style| {
-                Style.apply(style, &chameleon);
-            };
-            const text = comptime chameleon.fmt(@field(config.level_text, @tagName(level)));
-            writer.writeAll(text) catch {};
-        },
+        .escape_codes => writer.writeAll(Style.fmt(
+            @field(config.styles, @tagName(level)),
+            @field(config.level_text, @tagName(level)),
+        )) catch {},
         .windows_api => |ctx| if (builtin.os.tag == .windows) {
             inline for (@field(config.styles, @tagName(level))) |style| {
                 Style.applyWindows(style, ctx) catch {};
@@ -689,7 +818,6 @@ test "log with complex config" {
     const expectEqualStrings = std.testing.expectEqualStrings;
     var list = std.ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
-    comptime var chameleon: Chameleon = .{};
 
     const log = Axe(.{
         .format = "[%l]%s: %m", // no newline
@@ -697,7 +825,7 @@ test "log with complex config" {
         .loc_format = "", // can't test because it's inconsistent
         .time_format = .disabled, // can't test because it's inconsistent
         .styles = .{
-            .err = &.{.red},
+            .err = &.{ .bold, .red },
             .warn = &.{.yellow},
             .info = &.{.blue},
             .debug = &.{.cyan},
@@ -717,16 +845,16 @@ test "log with complex config" {
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello, {s}!", .{"world"});
-    try expectEqualStrings("[" ++ chameleon.blue().fmt("INFO") ++ "]: Hello, world!", list.items);
+    try expectEqualStrings("[" ++ Style.fmt(&.{.blue}, "INFO") ++ "]: Hello, world!", list.items);
     list.resize(0) catch unreachable;
 
     log.scoped(.my_scope).warn("", .{});
-    try expectEqualStrings("[" ++ chameleon.yellow().fmt("WARNING") ++ "] % my_scope: ", list.items);
+    try expectEqualStrings("[" ++ Style.fmt(&.{.yellow}, "WARNING") ++ "] % my_scope: ", list.items);
     list.resize(0) catch unreachable;
 
     log.scoped(.other_scope).err("`{s}` not found: {}", .{ "test.txt", error.FileNotFound });
     try expectEqualStrings(
-        "[" ++ chameleon.red().fmt("ERROR") ++ "] % other_scope: `test.txt` not found: error.FileNotFound",
+        "[" ++ Style.fmt(&.{ .bold, .red }, "ERROR") ++ "] % other_scope: `test.txt` not found: error.FileNotFound",
         list.items,
     );
     list.resize(0) catch unreachable;

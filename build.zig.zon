@@ -3,10 +3,6 @@
     .version = "0.5.0",
     .minimum_zig_version = "0.13.0",
     .dependencies = .{
-        .chameleon = .{
-            .url = "git+https://github.com/tr1ckydev/chameleon#d3bee161f700d317ee9c3c73d5fa23b77f878872",
-            .hash = "1220c53fc33154099840f082250ff808ac56439c0349934ea0ae2a4e96c071745b90",
-        },
         .zeit = .{
             .url = "git+https://github.com/rockorager/zeit#8a9f6bc37e56412636ad047021bd8e31a286b6be",
             .hash = "12203bf0f2599000d3b4325a57fae207b04e85cde2256018f61df910d7831c324957",

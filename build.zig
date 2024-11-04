@@ -4,10 +4,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const chameleon = b.dependency("chameleon", .{
-        .target = target,
-        .optimize = optimize,
-    }).module("chameleon");
     const zeit = b.dependency("zeit", .{
         .target = target,
         .optimize = optimize,
@@ -17,7 +13,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .target = target,
     });
-    axe.addImport("chameleon", chameleon);
     axe.addImport("zeit", zeit);
 
     const tests = b.addTest(.{
@@ -25,7 +20,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    tests.root_module.addImport("chameleon", chameleon);
     tests.root_module.addImport("zeit", zeit);
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run tests");
