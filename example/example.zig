@@ -20,7 +20,7 @@ pub fn main() !void {
 
     // stdout instead of stderr:
     const stdout_log = axe.Axe(.{
-        .format = "[%l]%s: %f\n", // the log format string, default is "%l%s: %f\n"
+        .format = "%L [%l]%s: %f\n", // the log format string, default is "%l%s: %f\n"
         .scope_format = " ~ %", // % is a placeholder for scope, default is "(%)"
         .color = .never, // auto by default
         .styles = .none, // colored by default, useless to change here since color is never
@@ -35,8 +35,8 @@ pub fn main() !void {
         .mutex = .none, // none by default
     });
     // no need for init since there is no color, no time and no writer
-    stdout_log.debug("Hello, stdout with no colors", .{});
-    stdout_log.scoped(.main).err("scoped :)", .{});
+    stdout_log.debugAt(@src(), "Hello, stdout with no colors", .{});
+    stdout_log.scoped(.main).errAt(@src(), "scoped :)", .{});
 
     // std.log:
     // init is technically optional but highly recommened, it's used to check

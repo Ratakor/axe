@@ -147,6 +147,42 @@ pub fn Axe(comptime config: Config) type {
                 pub fn debug(comptime format: []const u8, args: anytype) void {
                     log(.debug, scope, format, args);
                 }
+
+                /// Variant of `err` that logs with a source location.
+                pub fn errAt(
+                    comptime src: std.builtin.SourceLocation,
+                    comptime format: []const u8,
+                    args: anytype,
+                ) void {
+                    logAt(src, .err, scope, format, args);
+                }
+
+                /// Variant of `warn` that logs with a source location.
+                pub fn warnAt(
+                    comptime src: std.builtin.SourceLocation,
+                    comptime format: []const u8,
+                    args: anytype,
+                ) void {
+                    logAt(src, .warn, scope, format, args);
+                }
+
+                /// Variant of `info` that logs with a source location.
+                pub fn infoAt(
+                    comptime src: std.builtin.SourceLocation,
+                    comptime format: []const u8,
+                    args: anytype,
+                ) void {
+                    logAt(src, .info, scope, format, args);
+                }
+
+                /// Variant of `debug` that logs with a source location.
+                pub fn debugAt(
+                    comptime src: std.builtin.SourceLocation,
+                    comptime format: []const u8,
+                    args: anytype,
+                ) void {
+                    logAt(src, .debug, scope, format, args);
+                }
             };
         }
 
@@ -171,6 +207,18 @@ pub fn Axe(comptime config: Config) type {
         /// be used for messages which are only useful for debugging.
         pub const debug = default.debug;
 
+        /// Variant of `err` that logs with a source location.
+        pub const errAt = default.errAt;
+
+        /// Variant of `warn` that logs with a source location.
+        pub const warnAt = default.warnAt;
+
+        /// Variant of `info` that logs with a source location.
+        pub const infoAt = default.infoAt;
+
+        /// Variant of `debug` that logs with a source location.
+        pub const debugAt = default.debugAt;
+
         /// Drop-in replacement for `std.log.defaultLog`.
         /// ```zig
         /// const Axe = @import("axe").Axe(.{});
@@ -179,6 +227,16 @@ pub fn Axe(comptime config: Config) type {
         /// };
         /// ```
         pub fn log(
+            comptime level: Level,
+            comptime scope: @Type(.enum_literal),
+            comptime format: []const u8,
+            args: anytype,
+        ) void {
+            logAt(null, level, scope, format, args);
+        }
+
+        fn logAt(
+            comptime src: ?std.builtin.SourceLocation,
             comptime level: Level,
             comptime scope: @Type(.enum_literal),
             comptime format: []const u8,
@@ -210,34 +268,35 @@ pub fn Axe(comptime config: Config) type {
                 if (config.buffering) {
                     for (writers) |writer| {
                         var bw = std.io.bufferedWriter(writer);
-                        print(bw.writer(), writers_tty_config, time, level, scope, format, args);
+                        print(src, bw.writer(), writers_tty_config, time, level, scope, format, args);
                         bw.flush() catch {};
                     }
                     if (config.stdout) {
                         var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
-                        print(bw.writer(), stdout, time, level, scope, format, args);
+                        print(src, bw.writer(), stdout, time, level, scope, format, args);
                         bw.flush() catch {};
                     }
                     if (config.stderr) {
                         var bw = std.io.bufferedWriter(std.io.getStdErr().writer());
-                        print(bw.writer(), stderr, time, level, scope, format, args);
+                        print(src, bw.writer(), stderr, time, level, scope, format, args);
                         bw.flush() catch {};
                     }
                 } else {
                     for (writers) |writer| {
-                        print(writer, writers_tty_config, time, level, scope, format, args);
+                        print(src, writer, writers_tty_config, time, level, scope, format, args);
                     }
                     if (config.stdout) {
-                        print(std.io.getStdOut().writer(), stdout, time, level, scope, format, args);
+                        print(src, std.io.getStdOut().writer(), stdout, time, level, scope, format, args);
                     }
                     if (config.stderr) {
-                        print(std.io.getStdErr().writer(), stderr, time, level, scope, format, args);
+                        print(src, std.io.getStdErr().writer(), stderr, time, level, scope, format, args);
                     }
                 }
             }
         }
 
         inline fn print(
+            comptime src: ?std.builtin.SourceLocation,
             writer: anytype,
             tty_config: TtyConfig,
             time: if (config.time != .disabled) zeit.Time else void,
@@ -256,6 +315,14 @@ pub fn Axe(comptime config: Config) type {
                     @compileError("Missing format specifier after `%`.");
                 }
                 switch (config.format[i]) {
+                    'L' => if (src) |loc| {
+                        writer.print("{s}:{s}:{d}:{d}:", .{
+                            loc.file,
+                            loc.fn_name,
+                            loc.line,
+                            loc.column,
+                        }) catch {};
+                    },
                     'l' => writeLevel(writer, config, level, tty_config),
                     's' => writer.writeAll(comptime parseScopeFormat(config.scope_format, scope)) catch {},
                     't' => switch (config.time) {
