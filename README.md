@@ -1,9 +1,10 @@
 # Axe 🪓
 
 A fully customizable, drop-in replacement for `std.Options.LogFn` with support
-for multiple file logging, buffering, JSON, time, custom format, colors
-(automatic tty detection, windows support, NO\_COLOR support, CLICOLOR\_FORCE
-support), source location, and thread safety (multiple mutex interface available)!
+for multiple file logging (custom writer supported), buffering, JSON, time,
+custom format, colors (automatic tty detection, windows support, NO\_COLOR
+support, CLICOLOR\_FORCE support), source location, and thread safety (multiple
+mutex interface available)!
 
 ![](screenshot.png)
 
@@ -23,5 +24,7 @@ Check [example.zig](example/example.zig) for how to use it!
 
 [API Documentation](https://ratakor.github.io/axe)
 
+<!--
 ## TODO
 - Add a way to combine multiple loggers into one.
+-->
