@@ -111,6 +111,7 @@ pub fn Axe(comptime config: Config) type {
         }
 
         /// Deinitialize the logger.
+        /// WARNING: After this function is called any logging is undefined behavior.
         pub fn deinit(allocator: std.mem.Allocator) void {
             if (config.time != .disabled) {
                 timezone.deinit();
