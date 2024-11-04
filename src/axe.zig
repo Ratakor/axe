@@ -303,7 +303,7 @@ pub fn Axe(comptime config: Config) type {
             }
         }
 
-        inline fn print(
+        fn print(
             comptime src: ?std.builtin.SourceLocation,
             writer: anytype,
             tty_config: tty.Config,
@@ -323,31 +323,41 @@ pub fn Axe(comptime config: Config) type {
                     @compileError("Missing format specifier after `%`.");
                 }
                 switch (config.format[i]) {
-                    'l' => writeLevel(writer, config, level, tty_config),
-                    's' => if (scope != .default) {
-                        const close = applyStyle(writer, tty_config, config.styles.scope);
-                        defer writer.writeAll(close) catch {};
-                        writer.writeAll(comptime parseScopeFormat(config.scope_format, scope)) catch {};
-                    },
-                    't' => {
-                        const close = applyStyle(writer, tty_config, config.styles.time);
-                        defer writer.writeAll(close) catch {};
-                        switch (config.time_format) {
-                            .disabled => @compileError("Time specifier without time format."),
-                            .gofmt => |gofmt| time.gofmt(writer, gofmt.fmt) catch {},
-                            .strftime => |fmt| time.strftime(writer, fmt) catch {},
-                        }
-                    },
-                    'L' => if (src) |loc| {
-                        const close = applyStyle(writer, tty_config, config.styles.loc);
-                        defer writer.writeAll(close) catch {};
-                        writeLocation(writer, config.loc_format, loc);
-                    },
-                    'm' => {
-                        const close = applyStyle(writer, tty_config, config.styles.message);
-                        defer writer.writeAll(close) catch {};
-                        writer.print(format, args) catch {};
-                    },
+                    'l' => callWithStyles(
+                        writer,
+                        tty_config,
+                        @field(config.styles, @tagName(level)),
+                        writeAllCallback,
+                        .{ writer, @field(config.level_text, @tagName(level)) },
+                    ),
+                    's' => if (scope != .default) callWithStyles(
+                        writer,
+                        tty_config,
+                        config.styles.scope,
+                        writeAllCallback,
+                        .{ writer, comptime parseScopeFormat(config.scope_format, scope) },
+                    ),
+                    't' => if (config.time_format != .disabled) callWithStyles(
+                        writer,
+                        tty_config,
+                        config.styles.time,
+                        writeTimeCallback,
+                        .{ writer, time },
+                    ) else @compileError("Time specifier without time format."),
+                    'L' => if (src) |loc| callWithStyles(
+                        writer,
+                        tty_config,
+                        config.styles.loc,
+                        writeLocation,
+                        .{ writer, config.loc_format, loc },
+                    ),
+                    'm' => callWithStyles(
+                        writer,
+                        tty_config,
+                        config.styles.message,
+                        printCallback,
+                        .{ writer, format, args },
+                    ),
                     '%' => writer.writeAll("%") catch {},
                     else => @compileError("Unknown format specifier after `%`: `" ++ &[_]u8{config.format[i]} ++ "`."),
                 }
@@ -355,6 +365,14 @@ pub fn Axe(comptime config: Config) type {
             }
             if (i < config.format.len) {
                 writer.writeAll(config.format[i..]) catch {};
+            }
+        }
+
+        inline fn writeTimeCallback(writer: anytype, time: zeit.Time) void {
+            switch (config.time_format) {
+                .disabled => unreachable,
+                .gofmt => |gofmt| time.gofmt(writer, gofmt.fmt) catch {},
+                .strftime => |fmt| time.strftime(writer, fmt) catch {},
             }
         }
     };
@@ -416,6 +434,13 @@ pub const Style = union(enum) {
 
     inline fn fmt(comptime styles: []const Style, comptime text: []const u8) []const u8 {
         comptime {
+            const open, const close = makeStyles(styles);
+            return open ++ text ++ close;
+        }
+    }
+
+    fn makeStyles(comptime styles: []const Style) [2][]const u8 {
+        comptime {
             var open: []const u8 = "";
             var close: []const u8 = "";
             for (styles) |style| {
@@ -423,7 +448,7 @@ pub const Style = union(enum) {
                 open = open ++ esc[0];
                 close = esc[1] ++ close;
             }
-            return open ++ text ++ close;
+            return .{ open, close };
         }
     }
 
@@ -524,17 +549,7 @@ pub const Style = union(enum) {
         }
     }
 
-    // TODO
-    // fn apply(style: Style, ctx: anytype) void {
-    //     if (builtin.os.tag == .windows) {
-    //         return applyWindows(style, ctx);
-    //     } else {
-    //         const close = applyStyle(ctx, TtyConfig.escape_codes, &.[style]);
-    //         defer ctx.writeAll(close) catch {
-    //     }
-    // }
-
-    fn applyWindows(style: Style, ctx: tty.Config.WindowsContext) !void {
+    fn applyWindows(style: Style, ctx: tty.Config.WindowsContext) void {
         const attributes = switch (style) {
             .black => 0,
             .red => windows.FOREGROUND_RED,
@@ -557,15 +572,17 @@ pub const Style = union(enum) {
             .reset => ctx.reset_attributes,
             else => return,
         };
-        try windows.SetConsoleTextAttribute(ctx.handle, attributes);
+        windows.SetConsoleTextAttribute(ctx.handle, attributes) catch unreachable;
     }
 };
 
 pub const Styles = struct {
+    // levels
     err: []const Style = &.{ .bold, .red },
     warn: []const Style = &.{ .bold, .yellow },
     info: []const Style = &.{ .bold, .blue },
     debug: []const Style = &.{ .bold, .cyan },
+
     scope: []const Style = &.{},
     time: []const Style = &.{.white},
     loc: []const Style = &.{.dim},
@@ -629,52 +646,27 @@ pub const FunctionMutex = struct {
     };
 };
 
-// TODO: return: reset_attr on windows
-fn applyStyle(
+inline fn callWithStyles(
     writer: anytype,
     tty_config: tty.Config,
     comptime styles: []const Style,
-) []const u8 {
+    comptime callback: anytype,
+    args: anytype,
+) void {
     switch (tty_config) {
-        .no_color => return "",
+        .no_color => @call(.auto, callback, args),
         .escape_codes => {
-            comptime var open: []const u8 = "";
-            comptime var close: []const u8 = "";
-            comptime for (styles) |style| {
-                const esc = Style.wrap(style.values());
-                open = open ++ esc[0];
-                close = esc[1] ++ close;
-            };
+            const open, const close = comptime Style.makeStyles(styles);
             writer.writeAll(open) catch {};
-            return close;
+            @call(.auto, callback, args);
+            writer.writeAll(close) catch {};
         },
         .windows_api => |ctx| if (builtin.os.tag == .windows) {
             inline for (styles) |style| {
-                Style.applyWindows(style, ctx) catch {};
+                Style.applyWindows(style, ctx);
             }
-            return "";
-        } else unreachable,
-    }
-}
-
-fn writeLevel(
-    writer: anytype,
-    comptime config: Config,
-    comptime level: Level,
-    tty_config: tty.Config,
-) void {
-    switch (tty_config) {
-        .no_color => writer.writeAll(@field(config.level_text, @tagName(level))) catch {},
-        .escape_codes => writer.writeAll(Style.fmt(
-            @field(config.styles, @tagName(level)),
-            @field(config.level_text, @tagName(level)),
-        )) catch {},
-        .windows_api => |ctx| if (builtin.os.tag == .windows) {
-            inline for (@field(config.styles, @tagName(level))) |style| {
-                Style.applyWindows(style, ctx) catch {};
-            }
-            writer.writeAll(@field(config.level_text, @tagName(level))) catch {};
-            Style.applyWindows(.reset, ctx) catch {};
+            @call(.auto, callback, args);
+            Style.applyWindows(.reset, ctx);
         } else unreachable,
     }
 }
@@ -696,6 +688,14 @@ fn parseScopeFormat(comptime format: []const u8, comptime scope: @Type(.enum_lit
         }
         return text;
     }
+}
+
+inline fn writeAllCallback(writer: anytype, bytes: []const u8) void {
+    writer.writeAll(bytes) catch {};
+}
+
+inline fn printCallback(writer: anytype, comptime format: []const u8, args: anytype) void {
+    writer.print(format, args) catch {};
 }
 
 fn writeLocation(

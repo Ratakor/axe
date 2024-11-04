@@ -20,13 +20,13 @@ pub fn main() !void {
 
     // stdout instead of stderr:
     // note that unless .color is .always no color will be output to stdout
-    // only stderr has automatic color detection
+    //   since only stderr has automatic color detection
     const stdout_log = axe.Axe(.{
         .format = "[%l]%s: %m\n", // the log format string, default is "%l%s:%L %m\n"
         .scope_format = " ~ %", // % is a placeholder for scope, default is "(%)"
         .loc_format = "", // unused here, default is " %f:%l:"
         .time_format = .disabled, // disabled by default
-        .color = .never, // auto by default
+        .color = .never, // .auto by default
         .styles = .none, // colored by default, useless to change here since color is never
         .level_text = .{ // same as zig by default
             .err = "ErrOr",
