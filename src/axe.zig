@@ -9,15 +9,38 @@ pub const Config = struct {
     /// The following specifiers are supported:
     /// - `%l`: The log level text.
     /// - `%s`: The scope text, format is specified with `scope_format`.
-    /// - `%t`: The time, format is specified with `time`.
-    /// - `%f`: The actual format string.
+    /// - `%t`: The time, format is specified with `time_format`.
+    /// - `%L`: The source location, format is specified with `loc_format`.
+    /// - `%m`: The actual log message.
     /// - `%%`: A literal `%`.
-    format: []const u8 = "%l%s: %f\n",
+    ///
+    /// `%s` is not emitted on the default scope.
+    /// `%t` is not emitted if `time_format` is `.disabled`.
+    /// `%L` is not emitted if source location is not provided.
+    format: []const u8 = "%l%s:%L %m\n",
     /// The format to use for the scope text.
     /// The following specifiers are supported:
     /// - `%`: The scope name.
     /// - `%%`: A literal `%`.
     scope_format: []const u8 = "(%)",
+    /// The format to use for the source location provided by @src().
+    /// The following specifiers are supported:
+    /// - `%m`: The module name.
+    /// - `%f`: The file name.
+    /// - `%F`: The function name.
+    /// - `%l`: The line number.
+    /// - `%c`: The column number.
+    /// - `%%`: A literal `%`.
+    loc_format: []const u8 = " %f:%F:%l:%c:",
+    /// The time format to use for the log messages.
+    /// Make sure to add `%t` to `format` to display the time in logs.
+    time_format: union(enum) {
+        disabled,
+        /// Format based on golang time package.
+        gofmt: GoTimeFormat,
+        /// Format based on strftime(3).
+        strftime: []const u8,
+    } = .disabled,
     /// Whether to enable color output.
     color: enum {
         /// Check for NO_COLOR, CLICOLOR_FORCE and tty support on stdout/stderr.
@@ -38,15 +61,6 @@ pub const Config = struct {
     stderr: bool = true,
     /// Whether to buffer the log messages before writing them.
     buffering: bool = true,
-    /// The time format to use for the log messages.
-    /// Make sure to add `%t` to `format` to display the time in logs.
-    time: union(enum) {
-        disabled,
-        /// Format based on golang time package.
-        gofmt: GoTimeFormat,
-        /// Format based on strftime(3).
-        strftime: []const u8,
-    } = .disabled,
     /// The mutex interface to use for the log messages.
     mutex: union(enum) {
         none,
@@ -58,14 +72,14 @@ pub const Config = struct {
 
 /// Create a new logger based on the given configuration.
 pub fn Axe(comptime config: Config) type {
-    if (config.time == .strftime) comptime {
+    if (config.time_format == .strftime) comptime {
         var bogus: zeit.Time = .{};
         const void_writer: std.io.GenericWriter(void, error{}, struct {
             pub fn write(_: void, bytes: []const u8) error{}!usize {
                 return bytes.len;
             }
         }.write) = .{ .context = {} };
-        bogus.strftime(void_writer, config.time.strftime) catch |e|
+        bogus.strftime(void_writer, config.time_format.strftime) catch |e|
             @compileError("Invalid strftime format: " ++ @errorName(e));
     };
 
@@ -79,7 +93,7 @@ pub fn Axe(comptime config: Config) type {
         // zig/llvm can't handle this without explicit type
         var stdout: if (config.stdout) TtyConfig else void = if (config.stdout) .no_color else {};
         var stderr: if (config.stderr) TtyConfig else void = if (config.stderr) .no_color else {};
-        var timezone = if (config.time != .disabled) zeit.utc else {};
+        var timezone = if (config.time_format != .disabled) zeit.utc else {};
         var mutex = switch (config.mutex) {
             .none, .function => {},
             .default => if (builtin.single_threaded) {} else std.Thread.Mutex{},
@@ -95,13 +109,15 @@ pub fn Axe(comptime config: Config) type {
         /// `env` is only used during initialization and is not stored.
         pub fn init(
             allocator: std.mem.Allocator,
-            additional_writers: []const std.io.AnyWriter,
+            additional_writers: ?[]const std.io.AnyWriter,
             env: ?*const std.process.EnvMap,
         ) !void {
-            if (config.time != .disabled) {
+            if (config.time_format != .disabled) {
                 timezone = try zeit.local(allocator, env);
             }
-            writers = try allocator.dupe(std.io.AnyWriter, additional_writers);
+            if (additional_writers) |_writers| {
+                writers = try allocator.dupe(std.io.AnyWriter, _writers);
+            }
             if (config.stdout) {
                 stdout = detectTtyConfig(config, std.io.getStdOut());
             }
@@ -113,7 +129,7 @@ pub fn Axe(comptime config: Config) type {
         /// Deinitialize the logger.
         /// WARNING: After this function is called any logging is undefined behavior.
         pub fn deinit(allocator: std.mem.Allocator) void {
-            if (config.time != .disabled) {
+            if (config.time_format != .disabled) {
                 timezone.deinit();
             }
             allocator.free(writers);
@@ -259,7 +275,7 @@ pub fn Axe(comptime config: Config) type {
                 .custom => mutex.unlock(),
             };
 
-            const time = if (config.time != .disabled) t: {
+            const time = if (config.time_format != .disabled) t: {
                 const now = zeit.instant(.{ .timezone = &timezone }) catch unreachable;
                 break :t now.time();
             } else {};
@@ -299,7 +315,7 @@ pub fn Axe(comptime config: Config) type {
             comptime src: ?std.builtin.SourceLocation,
             writer: anytype,
             tty_config: TtyConfig,
-            time: if (config.time != .disabled) zeit.Time else void,
+            time: if (config.time_format != .disabled) zeit.Time else void,
             comptime level: Level,
             comptime scope: @Type(.enum_literal),
             comptime format: []const u8,
@@ -315,22 +331,19 @@ pub fn Axe(comptime config: Config) type {
                     @compileError("Missing format specifier after `%`.");
                 }
                 switch (config.format[i]) {
-                    'L' => if (src) |loc| {
-                        writer.print("{s}:{s}:{d}:{d}:", .{
-                            loc.file,
-                            loc.fn_name,
-                            loc.line,
-                            loc.column,
-                        }) catch {};
-                    },
                     'l' => writeLevel(writer, config, level, tty_config),
-                    's' => writer.writeAll(comptime parseScopeFormat(config.scope_format, scope)) catch {},
-                    't' => switch (config.time) {
-                        .disabled => @compileError("Time specifier without time format."),
+                    's' => if (scope != .default) {
+                        writer.writeAll(comptime parseScopeFormat(config.scope_format, scope)) catch {};
+                    },
+                    't' => switch (config.time_format) {
+                        .disabled => {}, // ignore for convenience
                         .gofmt => |gofmt| time.gofmt(writer, gofmt.fmt) catch {},
                         .strftime => |fmt| time.strftime(writer, fmt) catch {},
                     },
-                    'f' => writer.print(format, args) catch {},
+                    'L' => if (src) |loc| {
+                        writer.writeAll(comptime parseLocFormat(config.loc_format, loc)) catch {};
+                    },
+                    'm' => writer.print(format, args) catch {},
                     '%' => writer.writeAll("%") catch {},
                     else => @compileError("Unknown format specifier after `%`: `" ++ &[_]u8{config.format[i]} ++ "`."),
                 }
@@ -601,28 +614,52 @@ fn writeLevel(
 
 fn parseScopeFormat(comptime format: []const u8, comptime scope: @Type(.enum_literal)) []const u8 {
     comptime {
-        if (scope == .default) {
-            return "";
-        }
-
-        var fmt: []const u8 = "";
+        var text: []const u8 = "";
         var i: usize = 0;
         while (i < format.len) : (i += 1) {
             switch (format[i]) {
                 '%' => if (i + 1 >= format.len or format[i + 1] != '%') {
-                    fmt = fmt ++ @tagName(scope);
+                    text = text ++ @tagName(scope);
                 } else {
-                    fmt = fmt ++ "%";
+                    text = text ++ "%";
                     i += 1;
                 },
-                else => fmt = fmt ++ &[_]u8{format[i]},
+                else => text = text ++ &[_]u8{format[i]},
             }
         }
-        return fmt;
+        return text;
     }
 }
 
-test "runtime log without styles" {
+fn parseLocFormat(comptime format: []const u8, comptime loc: std.builtin.SourceLocation) []const u8 {
+    comptime {
+        var text: []const u8 = "";
+        var i: usize = 0;
+        while (i < format.len) : (i += 1) {
+            switch (format[i]) {
+                '%' => {
+                    i += 1; // skip '%'
+                    if (i >= format.len) {
+                        @compileError("Missing loc_format specifier after `%`.");
+                    }
+                    switch (format[i]) {
+                        'm' => text = text ++ loc.module,
+                        'f' => text = text ++ loc.file,
+                        'F' => text = text ++ loc.fn_name,
+                        'l' => text = text ++ std.fmt.comptimePrint("{d}", .{loc.line}),
+                        'c' => text = text ++ std.fmt.comptimePrint("{d}", .{loc.column}),
+                        '%' => text = text ++ "%",
+                        else => @compileError("Unknown loc_format specifier after `%`: `" ++ &[_]u8{format[i]} ++ "`."),
+                    }
+                },
+                else => text = text ++ &[_]u8{format[i]},
+            }
+        }
+        return text;
+    }
+}
+
+test "log without styles" {
     const expectEqualStrings = std.testing.expectEqualStrings;
     var list = std.ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
@@ -648,15 +685,17 @@ test "runtime log without styles" {
     list.resize(0) catch unreachable;
 }
 
-test "runtime log with complex config" {
+test "log with complex config" {
     const expectEqualStrings = std.testing.expectEqualStrings;
     var list = std.ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
     comptime var chameleon: Chameleon = .{};
 
     const log = Axe(.{
-        .format = "[%l]%s: %f", // no newline
+        .format = "[%l]%s: %m", // no newline
         .scope_format = " %% %",
+        .loc_format = "", // can't test because it's inconsistent
+        .time_format = .disabled, // can't test because it's inconsistent
         .styles = .{
             .err = &.{.red},
             .warn = &.{.yellow},
@@ -672,7 +711,6 @@ test "runtime log with complex config" {
         .color = .always,
         .stderr = false,
         .buffering = false,
-        .time = .disabled, // can't test because it's inconsistent
         .mutex = .default,
     });
     try log.init(std.testing.allocator, &.{arrayListWriter(&list)}, null);
@@ -694,14 +732,14 @@ test "runtime log with complex config" {
     list.resize(0) catch unreachable;
 }
 
-test "runtime json log" {
+test "json log" {
     const expectEqualStrings = std.testing.expectEqualStrings;
     var list = std.ArrayList(u8).init(std.testing.allocator);
     defer list.deinit();
 
     const log = Axe(.{
         .format =
-        \\{"level":"%l",%s"data":%f}
+        \\{"level":"%l",%s"data":%m}
         \\
         ,
         .scope_format =
