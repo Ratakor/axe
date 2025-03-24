@@ -1,11 +1,12 @@
 .{
-    .name = "axe",
-    .version = "0.6.0",
-    .minimum_zig_version = "0.13.0",
+    .name = .axe,
+    .version = "0.6.1",
+    .fingerprint = 0x6c6a1e2ce5546233,
+    .minimum_zig_version = "0.14.0",
     .dependencies = .{
         .zeit = .{
-            .url = "git+https://github.com/rockorager/zeit#8a9f6bc37e56412636ad047021bd8e31a286b6be",
-            .hash = "12203bf0f2599000d3b4325a57fae207b04e85cde2256018f61df910d7831c324957",
+            .url = "https://github.com/rockorager/zeit/archive/refs/tags/v0.6.0.tar.gz",
+            .hash = "zeit-0.0.0-5I6bk_pZAgB03N1p1GmVOZ--gOFwwQSRKj1UXb5tnaKS",
         },
     },
     .paths = .{

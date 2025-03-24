@@ -1,6 +1,7 @@
 .{
-    .name = "examples",
+    .name = .example,
     .version = "0.0.0",
+    .fingerprint = 0x6eec9b9f528bcd1e,
     .dependencies = .{
         .axe = .{
             .path = "../",
