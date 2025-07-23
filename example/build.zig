@@ -7,11 +7,15 @@ pub fn build(b: *std.Build) void {
     const axe = b.dependency("axe", .{}).module("axe");
     const exe = b.addExecutable(.{
         .name = "example",
-        .root_source_file = b.path("example.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("example.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "axe", .module = axe },
+            },
+        }),
     });
-    exe.root_module.addImport("axe", axe);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
