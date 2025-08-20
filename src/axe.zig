@@ -57,8 +57,6 @@ pub const Config = struct {
     level_text: LevelText = .{},
     /// Whether to write log messages to stderr.
     quiet: bool = false,
-    /// Whether to flush writers after every log.
-    flush_each_log: bool = true,
     /// The mutex interface to use for the log messages.
     mutex: union(enum) {
         none,
@@ -68,28 +66,12 @@ pub const Config = struct {
     } = .none,
 };
 
-fn discardDrain(w: *std.Io.Writer, data: []const []const u8, splat: usize) !usize {
-    var total: usize = w.end;
-    for (data) |chunk| {
-        total += chunk.len;
-    }
-    _ = splat;
-    w.end = 0;
-    return total;
-}
-
 /// Create a new logger based on the given configuration.
 pub fn Axe(comptime config: Config) type {
     if (config.time_format == .strftime) comptime {
         var bogus: zeit.Time = .{};
-        var void_writer: std.Io.Writer = .{
-            .vtable = &.{
-                .drain = discardDrain,
-                .flush = std.Io.Writer.noopFlush,
-            },
-            .buffer = &.{},
-        };
-        bogus.strftime(&void_writer, config.time_format.strftime) catch |e|
+        var void_writer: std.Io.Writer.Discarding = .init(&.{});
+        bogus.strftime(&void_writer.writer, config.time_format.strftime) catch |e|
             @compileError("Invalid strftime format: " ++ @errorName(e));
     };
 
@@ -102,7 +84,7 @@ pub fn Axe(comptime config: Config) type {
         var writers: []*std.Io.Writer = &.{};
         // zig/llvm can't handle this without explicit type
         var stderr_tty_config: if (config.quiet) void else tty.Config = if (config.quiet) {} else .no_color;
-        var stderr_buffer: [256]u8 = undefined;
+
         var timezone = if (config.time_format != .disabled) zeit.utc else {};
         var mutex = switch (config.mutex) {
             .none, .function => {},
@@ -296,16 +278,13 @@ pub fn Axe(comptime config: Config) type {
             nosuspend {
                 for (writers) |writer| {
                     print(src, writer, writers_tty_config, time, level, scope, format, args);
-                    if (config.flush_each_log) {
-                        writer.flush() catch {};
-                    }
+                    writer.flush() catch {};
                 }
                 if (!config.quiet) {
-                    var standard_error = std.fs.File.stderr().writer(&stderr_buffer);
-                    print(src, &standard_error.interface, stderr_tty_config, time, level, scope, format, args);
-                    if (config.flush_each_log) {
-                        standard_error.interface.flush() catch {};
-                    }
+                    var buffer: [256]u8 = undefined;
+                    var stderr = std.fs.File.stderr().writer(&buffer);
+                    defer stderr.interface.flush() catch {};
+                    print(src, &stderr.interface, stderr_tty_config, time, level, scope, format, args);
                 }
             }
         }
@@ -831,7 +810,7 @@ test "time format" {
     try std.testing.expectEqual(33, dest.written().len);
     dest.writer.end = 0;
     log.errAt(@src(), "Bye {}", .{'*'});
-    // [YYYY-mm-dd HH:MM:SS|INF|root] Bye 42
+    // [YYYY-mm-dd HH:MM:SS|ERR|root] Bye 42
     try std.testing.expectEqual(38, dest.written().len);
 }
 
