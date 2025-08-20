@@ -801,6 +801,40 @@ test "log with complex config" {
     );
 }
 
+test "time format" {
+    var dest: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer dest.deinit();
+
+    const log = Axe(.{
+        .format = "[%t|%l%s%L] %m\n",
+        .scope_format = "|%",
+        .time_format = .{ .strftime = "%Y-%m-%d %H:%M:%S" },
+        .loc_format = "|%m",
+        .quiet = true,
+        .color = .never,
+        .level_text = .{
+            .debug = "DBG",
+            .info = "INF",
+            .warn = "WRN",
+            .err = "ERR",
+        },
+    });
+    try log.init(std.testing.allocator, &.{&dest.writer}, null);
+    defer log.deinit(std.testing.allocator);
+
+    log.info("Hello {c}", .{'W'});
+    // [YYYY-mm-dd HH:MM:SS|INF] Hello W
+    try std.testing.expectEqual(34, dest.written().len);
+    dest.writer.end = 0;
+    log.scoped(.foo).warn("Hi", .{});
+    // [YYYY-mm-dd HH:MM:SS|WRN|foo] Hi
+    try std.testing.expectEqual(33, dest.written().len);
+    dest.writer.end = 0;
+    log.errAt(@src(), "Bye {}", .{'*'});
+    // [YYYY-mm-dd HH:MM:SS|INF|root] Bye 42
+    try std.testing.expectEqual(38, dest.written().len);
+}
+
 test "json log" {
     const expectEqualStrings = std.testing.expectEqualStrings;
     var buffer: [256]u8 = undefined;
