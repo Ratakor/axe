@@ -35,7 +35,6 @@ pub fn main() !void {
                 .debug = "DeBuG",
             },
             .quiet = true, // disable stderr logging, default is false
-            .flush_each_log = true, // default is true
             .mutex = .none, // none by default
         });
         var writer = std.fs.File.stdout().writer(&buffer);
