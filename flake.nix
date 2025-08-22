@@ -17,7 +17,7 @@
     zig,
     ...
   }: let
-    zig-version = "0.14.1";
+    zig-version = "0.15.1";
     overlays = [zig.overlays.default];
     systems = builtins.attrNames zig.packages;
   in

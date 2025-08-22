@@ -15,11 +15,7 @@ pub fn build(b: *std.Build) void {
     });
     axe.addImport("zeit", zeit);
 
-    const tests = b.addTest(.{
-        .root_source_file = b.path("src/axe.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    const tests = b.addTest(.{ .root_module = axe });
     tests.root_module.addImport("zeit", zeit);
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run tests");
@@ -28,9 +24,7 @@ pub fn build(b: *std.Build) void {
     const docs_step = b.step("docs", "Generate documentation");
     const docs_obj = b.addObject(.{
         .name = "axe",
-        .root_source_file = b.path("src/axe.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = axe,
     });
     const docs = docs_obj.getEmittedDocs();
     docs_step.dependOn(&b.addInstallDirectory(.{
