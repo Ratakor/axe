@@ -1,7 +1,7 @@
 .{
     .name = .example,
     .version = "0.0.0",
-    .minimum_zig_version = "0.15.0-dev.1438+242102f9d",
+    .minimum_zig_version = "0.15.1",
     .fingerprint = 0x6eec9b9f528bcd1e,
     .dependencies = .{
         .axe = .{

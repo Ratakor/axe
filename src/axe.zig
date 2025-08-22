@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const zeit = @import("zeit");
 const windows = std.os.windows;
-const tty = std.io.tty;
+const tty = std.Io.tty;
 
 pub const Config = struct {
     /// The format to use for the log messages.
@@ -84,7 +84,6 @@ pub fn Axe(comptime config: Config) type {
         var writers: []*std.Io.Writer = &.{};
         // zig/llvm can't handle this without explicit type
         var stderr_tty_config: if (config.quiet) void else tty.Config = if (config.quiet) {} else .no_color;
-
         var timezone = if (config.time_format != .disabled) zeit.utc else {};
         var mutex = switch (config.mutex) {
             .none, .function => {},
@@ -283,8 +282,8 @@ pub fn Axe(comptime config: Config) type {
                 if (!config.quiet) {
                     var buffer: [256]u8 = undefined;
                     var stderr = std.fs.File.stderr().writer(&buffer);
-                    defer stderr.interface.flush() catch {};
                     print(src, &stderr.interface, stderr_tty_config, time, level, scope, format, args);
+                    stderr.interface.flush() catch {};
                 }
             }
         }
