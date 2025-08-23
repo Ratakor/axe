@@ -1,10 +1,9 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const axe = @import("axe");
 
 const std_log = axe.Axe(.{
-    // .progress_stderr uses std.Progress.[un]lockStdErr
-    // it's not necessary but recommended for a global stderr logger
+    // .progress_stderr uses std.Progress.[un]lockStdErr.
+    // This specific mutex is recommended for a global stderr logger.
     .mutex = .{ .function = .progress_stderr },
 });
 pub const std_options: std.Options = .{
@@ -17,12 +16,12 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     var env = try std.process.getEnvMap(allocator);
     defer env.deinit();
-    var buffer: [128]u8 = undefined;
+    var buffer: [256]u8 = undefined;
 
     {
         // stdout instead of stderr:
-        // note that unless .color is .always no color will be output to stdout
-        //   since only stderr has automatic color detection
+        // Note that unless .color is .always no color will be output to stdout
+        // since only stderr has automatic color detection.
         const stdout_log = axe.Axe(.{
             .format = "[%l]%s: %m\n", // the log format string, default is "%l%s:%L %m\n"
             .scope_format = " ~ %", // % is a placeholder for scope, default is "(%)"
@@ -38,24 +37,28 @@ pub fn main() !void {
             .mutex = .none, // none by default
         });
         var writer = std.fs.File.stdout().writer(&buffer);
-        defer writer.interface.flush() catch unreachable;
         try stdout_log.init(allocator, &.{&writer.interface}, &env);
         defer stdout_log.deinit(allocator);
+
         stdout_log.debug("Hello, stdout with no colors", .{});
         stdout_log.scoped(.main).err("scoped :)", .{});
     }
 
-    // std.log:
-    // init is technically optional but highly recommended, it's used to check
-    //   color configuration, timezone and to add new writers.
-    // std.log supports all the features of axe.Axe even additional writers, time or custom mutex.
-    try std_log.init(allocator, null, &env);
-    defer std_log.deinit(allocator);
-    std.log.info("std.log.info with axe.Axe(.{{}})", .{});
-    std.log.scoped(.main).warn("this is scoped", .{});
+    {
+        // std.log:
+        // Init is technically optional but highly recommended, it's used to
+        // check color configuration, timezone and to add new writers.
+        // std.log supports all the features of axe.Axe even additional
+        // writers, time or custom mutex.
+        try std_log.init(allocator, null, &env);
+        defer std_log.deinit(allocator);
+
+        std.log.info("std.log.info with axe.Axe(.{{}})", .{});
+        std.log.scoped(.main).warn("this is scoped", .{});
+    }
 
     {
-        // custom writers:
+        // Custom writers:
         var f = try std.fs.cwd().createFile("log.txt", .{});
         defer f.close();
         const log = axe.Axe(.{
@@ -75,14 +78,7 @@ pub fn main() !void {
             },
             .mutex = .default, // default to std.Thread.Mutex
         });
-        // Note that we're using .any() to convert std.io.GenericWriter to std.io.AnyWriter.
-        // It is highly recommended to instead implement std.io.AnyWriter because .any()
-        //   uses a pointer to the GenericWriter context which could create a dangling pointer.
-        // See `fileWriter` for an example of how to implement std.io.AnyWriter for a file.
-        // See `arrayListWriter` in axe.zig for another example with ArrayList(u8).
-
         var writer = f.writer(&buffer);
-        defer writer.interface.flush() catch unreachable;
         try log.init(allocator, &.{&writer.interface}, &env);
         defer log.deinit(allocator);
 
@@ -93,7 +89,7 @@ pub fn main() !void {
     }
 
     {
-        // json log:
+        // JSON log:
         var json_file = try std.fs.cwd().createFile("log.json", .{});
         defer json_file.close();
         const json_log = axe.Axe(.{
@@ -108,13 +104,12 @@ pub fn main() !void {
             .color = .never,
         });
         var writer = json_file.writer(&buffer);
-        defer writer.interface.flush() catch unreachable;
         try json_log.init(allocator, &.{&writer.interface}, &env);
         defer json_log.deinit(allocator);
 
         json_log.debug("\"json log\"", .{});
         json_log.scoped(.main).info("\"json scoped\"", .{});
-        // it's easy to have struct instead of a string as data
+        // It's easy to have struct instead of a string as data.
         const data = .{ .a = 42, .b = 3.14 };
         json_log.info("{f}", .{std.json.fmt(data, .{})});
     }
