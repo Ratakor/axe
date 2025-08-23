@@ -1,4 +1,6 @@
 .zig-cache/
 zig-out/
+.direnv/
+
 example/log.txt
 example/log.json

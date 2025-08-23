@@ -46,7 +46,7 @@ pub fn main() !void {
     }
 
     // std.log:
-    // init is technically optional but highly recommened, it's used to check
+    // init is technically optional but highly recommended, it's used to check
     //   color configuration, timezone and to add new writers.
     // std.log supports all the features of axe.Axe even additional writers, time or custom mutex.
     try std_log.init(allocator, null, &env);
