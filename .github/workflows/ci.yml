@@ -23,7 +23,8 @@ jobs:
         with:
           version: 0.15.1
       - run: zig build test --summary all
-      - run: (cd example && zig build run)
+      - run: zig build run
+        working-directory: example
 
   lint:
     runs-on: ubuntu-latest
