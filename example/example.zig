@@ -57,6 +57,10 @@ pub fn main() !void {
         defer std_log.deinit(allocator);
 
         std.log.info("std.log.info with axe.Axe(.{{}})", .{});
+
+        // actually we want forced colors, try running with NO_COLOR=1
+        std_log.updateTtyConfig(.always);
+
         std.log.scoped(.main).warn("this is scoped", .{});
     }
 
