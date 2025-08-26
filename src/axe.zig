@@ -107,6 +107,13 @@ pub fn Axe(comptime config: Config) type {
         }
 
         /// Deinitialize the logger.
+        /// WARNING: If replacing `std.log` with `std_options` it is not
+        /// recommended to run `deinit` as the log instance should live until
+        /// the last program instant to output error logs from e.g.
+        /// gpa.deinit(). Consider using `std.heap.FixedBufferAllocator` to
+        /// avoid memory leaks warning from `std.heap.DebugAllocator`.
+        /// NOTE: There shouldn't be any issue if running a basic axe config
+        /// that requires no allocation (no time, no additional writers).
         pub fn deinit(allocator: std.mem.Allocator) void {
             if (config.time_format != .disabled) {
                 timezone.deinit();

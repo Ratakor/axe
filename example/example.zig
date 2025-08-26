@@ -6,9 +6,13 @@ const std_log = axe.Axe(.{
     // This specific mutex is recommended for a global stderr logger.
     .mutex = .{ .function = .progress_stderr },
 });
+
 pub const std_options: std.Options = .{
     .logFn = std_log.log,
 };
+
+var std_log_fba_buffer: [4 * 4096]u8 = undefined;
+var std_log_fba: std.heap.FixedBufferAllocator = .init(&std_log_fba_buffer);
 
 pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
@@ -49,12 +53,12 @@ pub fn main() !void {
 
     {
         // std.log:
-        // Init is technically optional but highly recommended, it's used to
-        // check color configuration, timezone and to add new writers.
-        // std.log supports all the features of axe.Axe even additional
-        // writers, time or custom mutex.
-        try std_log.init(allocator, null, &env);
-        defer std_log.deinit(allocator);
+        // Init is used to check color configuration, timezone and to add new
+        //   writers, it should be called at the very start of the program.
+        // std.log supports all the features of axe.Axe even additional writers,
+        //   time or custom mutex.
+        try std_log.init(std_log_fba.allocator(), null, &env);
+        // defer std_log.deinit(allocator);
 
         std.log.info("std.log.info with axe.Axe(.{{}})", .{});
 
