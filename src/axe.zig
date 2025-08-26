@@ -56,6 +56,7 @@ pub const Config = struct {
     /// The text to display for each log level.
     level_text: LevelText = .{},
     /// Whether to write log messages to stderr.
+    /// This is modifiable at runtime.
     quiet: bool = false,
     /// The mutex interface to use for the log messages.
     mutex: union(enum) {
@@ -74,9 +75,11 @@ pub fn Axe(comptime config: Config) type {
     };
 
     return struct {
+        /// Whether to write log messages to stderr.
+        pub var quiet = config.quiet;
+
         var writers: []*std.Io.Writer = &.{};
-        // zig/llvm can't handle this without explicit type
-        var stderr_tty_config: if (config.quiet) void else tty.Config = if (config.quiet) {} else .no_color;
+        var stderr_tty_config: tty.Config = .no_color;
         var timezone = if (config.time_format != .disabled) zeit.utc else {};
         var mutex = switch (config.mutex) {
             .none, .function => {},
@@ -111,13 +114,16 @@ pub fn Axe(comptime config: Config) type {
             if (additional_writers) |_writers| {
                 writers = try allocator.dupe(*std.Io.Writer, _writers);
             }
-            if (!config.quiet) {
+            if (!quiet) {
                 stderr_tty_config = switch (config.color) {
                     .auto => .detect(std.fs.File.stderr()),
-                    .always => if (builtin.os.tag == .windows) switch (.detect(std.fs.File.stderr())) {
-                        .no_color, .escape_codes => .escape_codes,
-                        .windows_api => |ctx| .{ .windows_api = ctx },
-                    } else .escape_codes,
+                    .always => if (builtin.os.tag == .windows)
+                        switch (tty.Config.detect(std.fs.File.stderr())) {
+                            .no_color, .escape_codes => .escape_codes,
+                            .windows_api => |ctx| .{ .windows_api = ctx },
+                        }
+                    else
+                        .escape_codes,
                     .never => .no_color,
                 };
             }
@@ -281,7 +287,7 @@ pub fn Axe(comptime config: Config) type {
                     print(src, writer, writers_tty_config, time, level, scope, format, args);
                     writer.flush() catch {};
                 }
-                if (!config.quiet) {
+                if (!quiet) {
                     var buffer: [256]u8 = undefined;
                     var stderr = std.fs.File.stderr().writer(&buffer);
                     print(src, &stderr.interface, stderr_tty_config, time, level, scope, format, args);
@@ -790,7 +796,6 @@ test "time format" {
         .scope_format = "|%",
         .time_format = .{ .strftime = "%Y-%m-%d %H:%M:%S" },
         .loc_format = "|%m",
-        .quiet = true,
         .color = .never,
         .level_text = .{
             .debug = "DBG",
@@ -799,6 +804,7 @@ test "time format" {
             .err = "ERR",
         },
     });
+    log.quiet = true;
     try log.init(std.testing.allocator, &.{&dest.writer}, null);
     defer log.deinit(std.testing.allocator);
 

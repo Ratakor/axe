@@ -33,12 +33,15 @@ pub fn main() !void {
                 .err = "ErrOr",
                 .debug = "DeBuG",
             },
-            .quiet = true, // disable stderr logging, default is false
+            .quiet = false, // disable stderr logging, default is false
             .mutex = .none, // none by default
         });
         var writer = std.fs.File.stdout().writer(&buffer);
         try stdout_log.init(allocator, &.{&writer.interface}, &env);
         defer stdout_log.deinit(allocator);
+
+        // wait we actually don't want stderr logging let's disable it
+        stdout_log.quiet = true;
 
         stdout_log.debug("Hello, stdout with no colors", .{});
         stdout_log.scoped(.main).err("scoped :)", .{});
