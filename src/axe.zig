@@ -42,20 +42,14 @@ pub const Config = struct {
         strftime: []const u8,
     } = .disabled,
     /// Whether to enable color output.
-    color: enum {
-        /// Check for NO_COLOR, CLICOLOR_FORCE and tty support on stderr.
-        /// Color output is disabled on other writers.
-        auto,
-        /// Enable color output on every writers.
-        always,
-        /// Disable color output on every writers.
-        never,
-    } = .auto,
+    /// This can be modified at runtime using `updateTtyConfig`.
+    color: Color = .auto,
     /// Set to `.none` to disable all styles.
     styles: Styles = .{},
     /// The text to display for each log level.
     level_text: LevelText = .{},
     /// Whether to write log messages to stderr.
+    /// This is modifiable at runtime.
     quiet: bool = false,
     /// The mutex interface to use for the log messages.
     mutex: union(enum) {
@@ -68,15 +62,13 @@ pub const Config = struct {
 
 /// Create a new logger based on the given configuration.
 pub fn Axe(comptime config: Config) type {
-    const writers_tty_config: tty.Config = switch (config.color) {
-        .always => .escape_codes,
-        .auto, .never => .no_color,
-    };
-
     return struct {
+        /// Whether to write log messages to stderr.
+        pub var quiet = config.quiet;
+
         var writers: []*std.Io.Writer = &.{};
-        // zig/llvm can't handle this without explicit type
-        var stderr_tty_config: if (config.quiet) void else tty.Config = if (config.quiet) {} else .no_color;
+        var stderr_tty_config = defaultTtyConfig(config.color);
+        var writers_tty_config = defaultTtyConfig(config.color);
         var timezone = if (config.time_format != .disabled) zeit.utc else {};
         var mutex = switch (config.mutex) {
             .none, .function => {},
@@ -111,16 +103,7 @@ pub fn Axe(comptime config: Config) type {
             if (additional_writers) |_writers| {
                 writers = try allocator.dupe(*std.Io.Writer, _writers);
             }
-            if (!config.quiet) {
-                stderr_tty_config = switch (config.color) {
-                    .auto => .detect(std.fs.File.stderr()),
-                    .always => if (builtin.os.tag == .windows) switch (.detect(std.fs.File.stderr())) {
-                        .no_color, .escape_codes => .escape_codes,
-                        .windows_api => |ctx| .{ .windows_api = ctx },
-                    } else .escape_codes,
-                    .never => .no_color,
-                };
-            }
+            updateTtyConfig(config.color);
         }
 
         /// Deinitialize the logger.
@@ -129,6 +112,22 @@ pub fn Axe(comptime config: Config) type {
                 timezone.deinit();
             }
             allocator.free(writers);
+        }
+
+        /// Update tty configuration for stderr and additional writers.
+        pub fn updateTtyConfig(color: Color) void {
+            writers_tty_config = defaultTtyConfig(color);
+            stderr_tty_config = switch (color) {
+                .auto => .detect(std.fs.File.stderr()),
+                .always => if (builtin.os.tag == .windows)
+                    switch (tty.Config.detect(std.fs.File.stderr())) {
+                        .no_color, .escape_codes => .escape_codes,
+                        .windows_api => |ctx| .{ .windows_api = ctx },
+                    }
+                else
+                    .escape_codes,
+                .never => .no_color,
+            };
         }
 
         /// Returns a scoped logging namespace that logs all messages using the scope provided.
@@ -281,7 +280,7 @@ pub fn Axe(comptime config: Config) type {
                     print(src, writer, writers_tty_config, time, level, scope, format, args);
                     writer.flush() catch {};
                 }
-                if (!config.quiet) {
+                if (!quiet) {
                     var buffer: [256]u8 = undefined;
                     var stderr = std.fs.File.stderr().writer(&buffer);
                     print(src, &stderr.interface, stderr_tty_config, time, level, scope, format, args);
@@ -417,6 +416,7 @@ pub const Style = union(enum) {
     bg_rgb: struct { r: u8, g: u8, b: u8 },
     /// #RRGGBB, #RGB, RRGGBB, RGB
     hex: []const u8,
+    /// #RRGGBB, #RGB, RRGGBB, RGB
     bg_hex: []const u8,
 
     inline fn fmt(comptime styles: []const Style, comptime text: []const u8) []const u8 {
@@ -561,6 +561,16 @@ pub const Style = union(enum) {
         };
         windows.SetConsoleTextAttribute(ctx.handle, attributes) catch unreachable;
     }
+};
+
+pub const Color = enum {
+    /// Check for NO_COLOR, CLICOLOR_FORCE and tty support on stderr.
+    /// Color output is disabled on other writers.
+    auto,
+    /// Enable color output on every writers.
+    always,
+    /// Disable color output on every writers.
+    never,
 };
 
 pub const Styles = struct {
@@ -713,6 +723,13 @@ fn writeLocation(
     }
 }
 
+inline fn defaultTtyConfig(color: Color) tty.Config {
+    return switch (color) {
+        .always => .escape_codes,
+        .auto, .never => .no_color,
+    };
+}
+
 test "log without styles" {
     const expectEqualStrings = std.testing.expectEqualStrings;
     var buffer: [256]u8 = undefined;
@@ -782,6 +799,7 @@ test "log with complex config" {
 }
 
 test "time format" {
+    const expectEqual = std.testing.expectEqual;
     var dest: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer dest.deinit();
 
@@ -790,7 +808,6 @@ test "time format" {
         .scope_format = "|%",
         .time_format = .{ .strftime = "%Y-%m-%d %H:%M:%S" },
         .loc_format = "|%m",
-        .quiet = true,
         .color = .never,
         .level_text = .{
             .debug = "DBG",
@@ -799,20 +816,21 @@ test "time format" {
             .err = "ERR",
         },
     });
+    log.quiet = true;
     try log.init(std.testing.allocator, &.{&dest.writer}, null);
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello {c}", .{'W'});
     // [YYYY-mm-dd HH:MM:SS|INF] Hello W
-    try std.testing.expectEqual(34, dest.written().len);
+    try expectEqual(34, dest.written().len);
     dest.writer.end = 0;
     log.scoped(.foo).warn("Hi", .{});
     // [YYYY-mm-dd HH:MM:SS|WRN|foo] Hi
-    try std.testing.expectEqual(33, dest.written().len);
+    try expectEqual(33, dest.written().len);
     dest.writer.end = 0;
     log.errAt(@src(), "Bye {}", .{'*'});
     // [YYYY-mm-dd HH:MM:SS|ERR|root] Bye 42
-    try std.testing.expectEqual(38, dest.written().len);
+    try expectEqual(38, dest.written().len);
 }
 
 test "json log" {
@@ -854,4 +872,30 @@ test "json log" {
         \\{"level":"info","data":{"a":42,"b":3.14}}
         \\
     , writer.buffered());
+}
+
+test "updateTtyConfig" {
+    const expectEqualStrings = std.testing.expectEqualStrings;
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+
+    const log = Axe(.{
+        .color = .never,
+        .quiet = true,
+    });
+    try log.init(std.testing.allocator, &.{&writer}, null);
+    defer log.deinit(std.testing.allocator);
+
+    log.debug("No color", .{});
+    try expectEqualStrings("debug: No color\n", writer.buffered());
+    writer.end = 0;
+
+    log.updateTtyConfig(.always);
+    log.debug("With color", .{});
+    try expectEqualStrings(Style.fmt(&.{ .bold, .cyan }, "debug") ++ ": With color\n", writer.buffered());
+    writer.end = 0;
+
+    log.updateTtyConfig(.never);
+    log.debug("No color again", .{});
+    try expectEqualStrings("debug: No color again\n", writer.buffered());
 }
