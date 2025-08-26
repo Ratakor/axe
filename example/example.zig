@@ -64,7 +64,7 @@ pub fn main() !void {
         const log = axe.Axe(.{
             .format = "%t %l%s%L %m\n",
             .scope_format = "@%",
-            .time_format = .{ .gofmt = .date_time }, // .date_time is a preset but custom format is also possible
+            .time_format = .{ .strftime = "%Y-%m-%d %H:%M:%S" },
             .styles = .{
                 .err = &.{ .{ .bg_hex = "ff0000" }, .bold, .underline },
                 .warn = &.{ .{ .rgb = .{ .r = 255, .g = 255, .b = 0 } }, .strikethrough },
@@ -100,7 +100,7 @@ pub fn main() !void {
             .scope_format =
             \\"scope":"%",
             ,
-            .time_format = .{ .gofmt = .rfc3339 },
+            .time_format = .{ .gofmt = .rfc3339 }, // .rfc3339 is a preset but custom format is also possible
             .color = .never,
         });
         var writer = json_file.writer(&buffer);

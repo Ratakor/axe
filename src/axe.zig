@@ -68,13 +68,6 @@ pub const Config = struct {
 
 /// Create a new logger based on the given configuration.
 pub fn Axe(comptime config: Config) type {
-    if (config.time_format == .strftime) comptime {
-        var bogus: zeit.Time = .{};
-        var void_writer: std.Io.Writer.Discarding = .init(&.{});
-        bogus.strftime(&void_writer.writer, config.time_format.strftime) catch |e|
-            @compileError("Invalid strftime format: " ++ @errorName(e));
-    };
-
     const writers_tty_config: tty.Config = switch (config.color) {
         .always => .escape_codes,
         .auto, .never => .no_color,
@@ -94,8 +87,8 @@ pub fn Axe(comptime config: Config) type {
         /// Setup timezone and tty configuration for stderr.
         /// This function should be called before any logging.
         /// `additional_writers` is a list of writers to write the log messages to.
-        /// `additional_writers` will be duplicated so passing `&.{}` is safe.
-        /// WARNING: Getting an AnyWriter with std.io.GenericWriter.any() is prone to segfaults.
+        /// `additional_writers` will be duplicated so passing `&.{}` is safe
+        ///   but each writers should live as long as the log instance.
         /// `env` is used to check `TZ` and `TZDIR` for the timezone.
         /// `env` is only used during initialization and is not stored.
         pub fn init(
@@ -103,6 +96,15 @@ pub fn Axe(comptime config: Config) type {
             additional_writers: ?[]const *std.Io.Writer,
             env: ?*const std.process.EnvMap,
         ) !void {
+            // Validate strftime format
+            // This used to be comptime but sadly it's not possible since zig
+            //   0.15.1 because std.Io.Writer.print uses std.options
+            if (config.time_format == .strftime) {
+                var bogus: zeit.Time = .{};
+                var void_writer: std.Io.Writer.Discarding = .init(&.{});
+                try bogus.strftime(&void_writer.writer, config.time_format.strftime);
+            }
+
             if (config.time_format != .disabled) {
                 timezone = try zeit.local(allocator, env);
             }

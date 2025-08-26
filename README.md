@@ -10,7 +10,7 @@ A fully customizable logging library for the Zig programming language.
 - Minimal (less than 1000 LOC)
 - Extremely fast performance with intensive use of comptime
 - Parallel file logging with support for stderr & custom writers
-- Full custom format support with sane defaults & [JSON](https://github.com/ratakor/axe/blob/master/example/example/zig#L93) support
+- Full custom format support with sane defaults & [JSON](https://github.com/ratakor/axe/blob/master/example/example.zig#L93) support
 - Source location support with `axe.logAt(@src(), ...)`
 - Built-in time support with [zeit](https://github.com/rockorager/zeit)
 - Built-in colors support
