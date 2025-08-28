@@ -2,40 +2,34 @@
   description = "A logging library for the Zig programming language";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+
     zig = {
-      url = "github:mitchellh/zig-overlay";
+      url = "github:silversquirl/zig-flake";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.flake-utils.follows = "flake-utils";
+    };
+
+    zls = {
+      # https://github.com/zigtools/zls/pull/2469
+      url = "github:Ratakor/zls/older-versions";
+      inputs = {
+        nixpkgs.follows = "nixpkgs";
+        zig-flake.follows = "zig";
+      };
     };
   };
 
-  outputs = {
-    nixpkgs,
-    flake-utils,
-    zig,
-    ...
-  }: let
-    zig-version = "0.15.1";
-    overlays = [zig.overlays.default];
-    systems = builtins.attrNames zig.packages;
-  in
-    flake-utils.lib.eachSystem systems (
-      system: let
-        pkgs = import nixpkgs {inherit overlays system;};
-      in {
-        # nix run .
-        apps.default = flake-utils.lib.mkApp {
-          drv = pkgs.zigpkgs."${zig-version}";
-        };
-
-        # nix develop .
-        devShells.default = pkgs.mkShell {
-          nativeBuildInputs = with pkgs; [
-            zigpkgs."${zig-version}"
-          ];
-        };
-      }
-    );
+  outputs = inputs: let
+    forAllSystems = f: builtins.mapAttrs f inputs.nixpkgs.legacyPackages;
+  in {
+    devShells = forAllSystems (system: pkgs: {
+      default = pkgs.mkShellNoCC {
+        packages = with pkgs; [
+          bash
+          inputs.zig.packages.${system}.zig_0_15_1
+          inputs.zls.packages.${system}.zls_0_15_0
+        ];
+      };
+    });
+  };
 }
