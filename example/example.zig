@@ -18,8 +18,18 @@ pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    var threaded: std.Io.Threaded = .init(allocator);
+    defer threaded.deinit();
+    const io = threaded.io();
+
     var env = try std.process.getEnvMap(allocator);
     defer env.deinit();
+
+    return juicyMain(allocator, io, env);
+}
+
+pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: std.process.EnvMap) !void {
     var buffer: [256]u8 = undefined;
 
     {
@@ -41,7 +51,7 @@ pub fn main() !void {
             .mutex = .none, // none by default
         });
         var writer = std.fs.File.stdout().writer(&buffer);
-        try stdout_log.init(allocator, &.{&writer.interface}, &env);
+        try stdout_log.init(allocator, io, &.{&writer.interface}, &env);
         defer stdout_log.deinit(allocator);
 
         // wait we actually don't want stderr logging let's disable it
@@ -57,7 +67,7 @@ pub fn main() !void {
         //   writers, it should be called at the very start of the program.
         // std.log supports all the features of axe.Axe even additional writers,
         //   time or custom mutex.
-        try std_log.init(std_log_fba.allocator(), null, &env);
+        try std_log.init(std_log_fba.allocator(), io, null, &env);
         // defer std_log.deinit(allocator);
 
         std.log.info("std.log.info with axe.Axe(.{{}})", .{});
@@ -90,7 +100,7 @@ pub fn main() !void {
             .mutex = .default, // default to std.Thread.Mutex
         });
         var writer = f.writer(&buffer);
-        try log.init(allocator, &.{&writer.interface}, &env);
+        try log.init(allocator, io, &.{&writer.interface}, &env);
         defer log.deinit(allocator);
 
         log.debug("Hello! This will have no color if NO_COLOR is defined or if piped", .{});
@@ -115,7 +125,7 @@ pub fn main() !void {
             .color = .never,
         });
         var writer = json_file.writer(&buffer);
-        try json_log.init(allocator, &.{&writer.interface}, &env);
+        try json_log.init(allocator, io, &.{&writer.interface}, &env);
         defer json_log.deinit(allocator);
 
         json_log.debug("\"json log\"", .{});

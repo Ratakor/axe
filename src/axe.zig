@@ -70,6 +70,7 @@ pub fn Axe(comptime config: Config) type {
         var stderr_tty_config = defaultTtyConfig(config.color);
         var writers_tty_config = defaultTtyConfig(config.color);
         var timezone = if (config.time_format != .disabled) zeit.utc else {};
+        var io: std.Io = undefined;
         var mutex = switch (config.mutex) {
             .none, .function => {},
             .default => if (builtin.single_threaded) {} else std.Thread.Mutex{},
@@ -85,6 +86,7 @@ pub fn Axe(comptime config: Config) type {
         /// `env` is only used during initialization and is not stored.
         pub fn init(
             allocator: std.mem.Allocator,
+            _io: std.Io,
             additional_writers: ?[]const *std.Io.Writer,
             env: ?*const std.process.EnvMap,
         ) !void {
@@ -96,9 +98,9 @@ pub fn Axe(comptime config: Config) type {
                 var void_writer: std.Io.Writer.Discarding = .init(&.{});
                 try bogus.strftime(&void_writer.writer, config.time_format.strftime);
             }
-
+            io = _io;
             if (config.time_format != .disabled) {
-                timezone = try zeit.local(allocator, env);
+                timezone = try zeit.local(allocator, io, env);
             }
             if (additional_writers) |_writers| {
                 writers = try allocator.dupe(*std.Io.Writer, _writers);
@@ -278,7 +280,7 @@ pub fn Axe(comptime config: Config) type {
             };
 
             const time = if (config.time_format != .disabled) t: {
-                const now = zeit.instant(.{ .timezone = &timezone }) catch unreachable;
+                const now = zeit.instant(.{ .timezone = &timezone, .io = io }) catch unreachable;
                 break :t now.time();
             } else {};
 
@@ -746,7 +748,7 @@ test "log without styles" {
         .styles = .none,
         .quiet = true,
     });
-    try log.init(std.testing.allocator, &.{&writer}, null);
+    try log.init(std.testing.allocator, std.testing.io, &.{&writer}, null);
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello, {s}!", .{"world"});
@@ -787,7 +789,7 @@ test "log with complex config" {
         .quiet = true,
         .mutex = .default,
     });
-    try log.init(std.testing.allocator, &.{&writer}, null);
+    try log.init(std.testing.allocator, std.testing.io, &.{&writer}, null);
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello, {s}!", .{"world"});
@@ -824,7 +826,7 @@ test "time format" {
         },
     });
     log.quiet = true;
-    try log.init(std.testing.allocator, &.{&dest.writer}, null);
+    try log.init(std.testing.allocator, std.testing.io, &.{&dest.writer}, null);
     defer log.deinit(std.testing.allocator);
 
     log.info("Hello {c}", .{'W'});
@@ -856,7 +858,7 @@ test "json log" {
         .quiet = true,
         .color = .never,
     });
-    try log.init(std.testing.allocator, &.{&writer}, null);
+    try log.init(std.testing.allocator, std.testing.io, &.{&writer}, null);
     defer log.deinit(std.testing.allocator);
 
     log.debug("\"json log\"", .{});
@@ -890,7 +892,7 @@ test "updateTtyConfig" {
         .color = .never,
         .quiet = true,
     });
-    try log.init(std.testing.allocator, &.{&writer}, null);
+    try log.init(std.testing.allocator, std.testing.io, &.{&writer}, null);
     defer log.deinit(std.testing.allocator);
 
     log.debug("No color", .{});
