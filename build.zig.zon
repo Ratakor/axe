@@ -1,8 +1,8 @@
 .{
     .name = .axe,
-    .version = "0.7.0",
+    .version = "0.8.0",
     .fingerprint = 0x6c6a1e2ce5546233,
-    .minimum_zig_version = "0.15.1",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zeit = .{
             .url = "git+https://github.com/elerch/zeit?ref=main#8190461dc1f892f6370fa9d5cd76690aac0e1c71",
