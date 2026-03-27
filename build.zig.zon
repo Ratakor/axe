@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zeit = .{
-            .url = "git+https://github.com/elerch/zeit?ref=main#8190461dc1f892f6370fa9d5cd76690aac0e1c71",
-            .hash = "zeit-0.6.0-5I6bk99-AgDNMIDuw2Zcoe_9QYIpzwZJqeqMpU54egTd",
+            .url = "git+https://github.com/rockorager/zeit?ref=0.16#fdaad9c5884f41a3640c768f4f9fc116e763c321",
+            .hash = "zeit-0.6.0-5I6bk3K6AgCFnc_9CN7KJjaeNJz1VuwP4DA7Gs9vgxuz",
         },
     },
     .paths = .{

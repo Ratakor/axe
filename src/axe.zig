@@ -70,7 +70,7 @@ pub fn Axe(comptime config: Config) type {
         var stderr_tty_config = defaultTtyConfig(config.color);
         var writers_tty_config = defaultTtyConfig(config.color);
         var timezone = if (config.time_format != .disabled) zeit.utc else {};
-        var io: std.Io = undefined;
+        var io: std.Io = std.Io.Threaded.global_single_threaded.io();
         var mutex = switch (config.mutex) {
             .none, .function => {},
             .default => if (builtin.single_threaded) {} else std.Io.Mutex.init,
@@ -100,7 +100,10 @@ pub fn Axe(comptime config: Config) type {
             }
             io = _io;
             if (config.time_format != .disabled) {
-                timezone = try zeit.local(allocator, io, env);
+                timezone = try zeit.local(allocator, io, .{
+                    .tz = if (env) |e| e.get("TZ") else null,
+                    .tzdir = if (env) |e| e.get("TZDIR") else null,
+                });
             }
             if (additional_writers) |_writers| {
                 writers = try allocator.dupe(*std.Io.Writer, _writers);
@@ -280,7 +283,7 @@ pub fn Axe(comptime config: Config) type {
             };
 
             const time = if (config.time_format != .disabled) t: {
-                const now = zeit.instant(.{ .timezone = &timezone, .io = io }) catch unreachable;
+                const now = zeit.instant(io, .{ .timezone = &timezone }) catch unreachable;
                 break :t now.time();
             } else {};
 
