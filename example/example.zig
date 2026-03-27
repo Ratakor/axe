@@ -2,9 +2,7 @@ const std = @import("std");
 const axe = @import("axe");
 
 const std_log = axe.Axe(.{
-    // .progress_stderr uses std.Progress.[un]lockStdErr.
-    // This specific mutex is recommended for a global stderr logger.
-    .mutex = .{ .function = .progress_stderr },
+    .mutex = .default,
 });
 
 pub const std_options: std.Options = .{
@@ -14,22 +12,11 @@ pub const std_options: std.Options = .{
 var std_log_fba_buffer: [4 * 4096]u8 = undefined;
 var std_log_fba: std.heap.FixedBufferAllocator = .init(&std_log_fba_buffer);
 
-pub fn main() !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var threaded: std.Io.Threaded = .init(allocator);
-    defer threaded.deinit();
-    const io = threaded.io();
-
-    var env = try std.process.getEnvMap(allocator);
-    defer env.deinit();
-
-    return juicyMain(allocator, io, env);
+pub fn main(init: std.process.Init) !void {
+    return juicyMain(init.gpa, init.io, init.environ_map);
 }
 
-pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: std.process.EnvMap) !void {
+pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: *std.process.Environ.Map) !void {
     var buffer: [256]u8 = undefined;
 
     {
@@ -50,8 +37,8 @@ pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: std.process.EnvM
             .quiet = false, // disable stderr logging, default is false
             .mutex = .none, // none by default
         });
-        var writer = std.fs.File.stdout().writer(&buffer);
-        try stdout_log.init(allocator, io, &.{&writer.interface}, &env);
+        var writer = std.Io.File.stdout().writer(io, &buffer);
+        try stdout_log.init(allocator, io, &.{&writer.interface}, env);
         defer stdout_log.deinit(allocator);
 
         // wait we actually don't want stderr logging let's disable it
@@ -67,7 +54,7 @@ pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: std.process.EnvM
         //   writers, it should be called at the very start of the program.
         // std.log supports all the features of axe.Axe even additional writers,
         //   time or custom mutex.
-        try std_log.init(std_log_fba.allocator(), io, null, &env);
+        try std_log.init(std_log_fba.allocator(), io, null, env);
         // defer std_log.deinit(allocator);
 
         std.log.info("std.log.info with axe.Axe(.{{}})", .{});
@@ -80,8 +67,8 @@ pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: std.process.EnvM
 
     {
         // Custom writers:
-        var f = try std.fs.cwd().createFile("log.txt", .{});
-        defer f.close();
+        var f = try std.Io.Dir.cwd().createFile(io, "log.txt", .{});
+        defer f.close(io);
         const log = axe.Axe(.{
             .format = "%t %l%s%L %m\n",
             .scope_format = "@%",
@@ -97,10 +84,10 @@ pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: std.process.EnvM
                 .info = "INFO",
                 .debug = "DEBUG",
             },
-            .mutex = .default, // default to std.Thread.Mutex
+            .mutex = .default,
         });
-        var writer = f.writer(&buffer);
-        try log.init(allocator, io, &.{&writer.interface}, &env);
+        var writer = f.writer(io, &buffer);
+        try log.init(allocator, io, &.{&writer.interface}, env);
         defer log.deinit(allocator);
 
         log.debug("Hello! This will have no color if NO_COLOR is defined or if piped", .{});
@@ -111,8 +98,8 @@ pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: std.process.EnvM
 
     {
         // JSON log:
-        var json_file = try std.fs.cwd().createFile("log.json", .{});
-        defer json_file.close();
+        var json_file = try std.Io.Dir.cwd().createFile(io, "log.json", .{});
+        defer json_file.close(io);
         const json_log = axe.Axe(.{
             .format =
             \\{"level":"%l",%s"time":"%t","data":%m}
@@ -124,8 +111,8 @@ pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: std.process.EnvM
             .time_format = .{ .gofmt = .rfc3339 }, // .rfc3339 is a preset but custom format is also possible
             .color = .never,
         });
-        var writer = json_file.writer(&buffer);
-        try json_log.init(allocator, io, &.{&writer.interface}, &env);
+        var writer = json_file.writer(io, &buffer);
+        try json_log.init(allocator, io, &.{&writer.interface}, env);
         defer json_log.deinit(allocator);
 
         json_log.debug("\"json log\"", .{});

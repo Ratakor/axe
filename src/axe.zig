@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const zeit = @import("zeit");
 const windows = std.os.windows;
-const tty = std.Io.tty;
+const tty = std.Io.Terminal;
 
 pub const Config = struct {
     /// The format to use for the log messages.
@@ -73,7 +73,7 @@ pub fn Axe(comptime config: Config) type {
         var io: std.Io = undefined;
         var mutex = switch (config.mutex) {
             .none, .function => {},
-            .default => if (builtin.single_threaded) {} else std.Thread.Mutex{},
+            .default => if (builtin.single_threaded) {} else std.Io.Mutex.init,
             .custom => |T| T{},
         };
 
@@ -88,7 +88,7 @@ pub fn Axe(comptime config: Config) type {
             allocator: std.mem.Allocator,
             _io: std.Io,
             additional_writers: ?[]const *std.Io.Writer,
-            env: ?*const std.process.EnvMap,
+            env: ?*const std.process.Environ.Map,
         ) !void {
             // Validate strftime format
             // This used to be comptime but sadly it's not possible since zig
@@ -127,11 +127,11 @@ pub fn Axe(comptime config: Config) type {
         pub fn updateTtyConfig(color: Color) void {
             writers_tty_config = defaultTtyConfig(color);
             stderr_tty_config = switch (color) {
-                .auto => .detect(std.fs.File.stderr()),
+                .auto => tty.Mode.detect(io, std.Io.File.stderr(), false, false) catch .no_color,
                 .always => if (builtin.os.tag == .windows)
-                    switch (tty.Config.detect(std.fs.File.stderr())) {
+                    switch (tty.Mode.detect(io, std.Io.File.stderr(), false, false) catch .no_color) {
                         .no_color, .escape_codes => .escape_codes,
-                        .windows_api => |ctx| .{ .windows_api = ctx },
+                        .windows_api => |wa| .{ .windows_api = wa },
                     }
                 else
                     .escape_codes,
@@ -140,7 +140,7 @@ pub fn Axe(comptime config: Config) type {
         }
 
         /// Returns a scoped logging namespace that logs all messages using the scope provided.
-        pub fn scoped(comptime scope: @Type(.enum_literal)) type {
+        pub fn scoped(comptime scope: @EnumLiteral()) type {
             return struct {
                 /// Log an error message. This log level is intended to be used
                 /// when something has gone wrong. This might be recoverable or might
@@ -248,7 +248,7 @@ pub fn Axe(comptime config: Config) type {
         /// ```
         pub fn log(
             comptime level: Level,
-            comptime scope: @Type(.enum_literal),
+            comptime scope: @EnumLiteral(),
             comptime format: []const u8,
             args: anytype,
         ) void {
@@ -258,7 +258,7 @@ pub fn Axe(comptime config: Config) type {
         fn logAt(
             comptime src: ?std.builtin.SourceLocation, // should this be comptime?
             comptime level: Level,
-            comptime scope: @Type(.enum_literal),
+            comptime scope: @EnumLiteral(),
             comptime format: []const u8,
             args: anytype,
         ) void {
@@ -269,13 +269,13 @@ pub fn Axe(comptime config: Config) type {
             switch (config.mutex) {
                 .none => {},
                 .function => |f| f.lock(),
-                .default => if (!builtin.single_threaded) mutex.lock(),
+                .default => if (!builtin.single_threaded) mutex.lockUncancelable(io),
                 .custom => mutex.lock(),
             }
             defer switch (config.mutex) {
                 .none => {},
                 .function => |f| f.unlock(),
-                .default => if (!builtin.single_threaded) mutex.unlock(),
+                .default => if (!builtin.single_threaded) mutex.unlock(io),
                 .custom => mutex.unlock(),
             };
 
@@ -291,7 +291,7 @@ pub fn Axe(comptime config: Config) type {
                 }
                 if (!quiet) {
                     var buffer: [256]u8 = undefined;
-                    var stderr = std.fs.File.stderr().writer(&buffer);
+                    var stderr = std.Io.File.stderr().writer(io, &buffer);
                     print(src, &stderr.interface, stderr_tty_config, time, level, scope, format, args);
                     stderr.interface.flush() catch {};
                 }
@@ -301,10 +301,10 @@ pub fn Axe(comptime config: Config) type {
         fn print(
             comptime src: ?std.builtin.SourceLocation,
             writer: *std.Io.Writer,
-            tty_config: tty.Config,
+            tty_config: tty.Mode,
             time: if (config.time_format != .disabled) zeit.Time else void,
             comptime level: Level,
-            comptime scope: @Type(.enum_literal),
+            comptime scope: @EnumLiteral(),
             comptime format: []const u8,
             args: anytype,
         ) void {
@@ -545,8 +545,8 @@ pub const Style = union(enum) {
         }
     }
 
-    fn applyWindows(style: Style, ctx: tty.Config.WindowsContext) void {
-        const attributes = switch (style) {
+    fn applyWindows(style: Style, wa: tty.Mode.WindowsApi) void {
+        const attributes: windows.WORD = switch (style) {
             .black => 0,
             .red => windows.FOREGROUND_RED,
             .green => windows.FOREGROUND_GREEN,
@@ -565,10 +565,11 @@ pub const Style = union(enum) {
             .bright_white, .bold => windows.FOREGROUND_RED | windows.FOREGROUND_GREEN | windows.FOREGROUND_BLUE | windows.FOREGROUND_INTENSITY,
             // "dim" is not supported using basic character attributes, but let's still make it do *something*.
             .dim => windows.FOREGROUND_INTENSITY,
-            .reset => ctx.reset_attributes,
+            .reset => wa.reset_attributes,
             else => return,
         };
-        windows.SetConsoleTextAttribute(ctx.handle, attributes) catch unreachable;
+        var op = windows.CONSOLE.USER_IO.SET_TEXT_ATTRIBUTE(attributes);
+        _ = op.operate(wa.io, wa.file) catch {};
     }
 };
 
@@ -645,16 +646,11 @@ pub const GoTimeFormat = struct {
 pub const FunctionMutex = struct {
     lock: fn () void,
     unlock: fn () void,
-
-    pub const progress_stderr: FunctionMutex = .{
-        .lock = std.Progress.lockStdErr,
-        .unlock = std.Progress.unlockStdErr,
-    };
 };
 
 inline fn callWithStyles(
     writer: *std.Io.Writer,
-    tty_config: tty.Config,
+    tty_config: tty.Mode,
     comptime styles: []const Style,
     comptime callback: anytype,
     args: anytype,
@@ -677,7 +673,7 @@ inline fn callWithStyles(
     }
 }
 
-fn parseScopeFormat(comptime format: []const u8, comptime scope: @Type(.enum_literal)) []const u8 {
+fn parseScopeFormat(comptime format: []const u8, comptime scope: @EnumLiteral()) []const u8 {
     comptime {
         var text: []const u8 = "";
         var i: usize = 0;
@@ -732,7 +728,7 @@ fn writeLocation(
     }
 }
 
-inline fn defaultTtyConfig(color: Color) tty.Config {
+inline fn defaultTtyConfig(color: Color) tty.Mode {
     return switch (color) {
         .always => .escape_codes,
         .auto, .never => .no_color,
