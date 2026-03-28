@@ -5,31 +5,39 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
     zig = {
-      url = "github:silversquirl/zig-flake";
+      url = "github:mitchellh/zig-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
     zls = {
-      # https://github.com/zigtools/zls/pull/2469
-      url = "github:Ratakor/zls/older-versions";
+      url = "github:zigtools/zls";
       inputs = {
         nixpkgs.follows = "nixpkgs";
-        zig-flake.follows = "zig";
+        zig-overlay.follows = "zig";
       };
     };
   };
 
-  outputs = inputs: let
-    forAllSystems = f: builtins.mapAttrs f inputs.nixpkgs.legacyPackages;
-  in {
-    devShells = forAllSystems (system: pkgs: {
-      default = pkgs.mkShellNoCC {
-        packages = with pkgs; [
-          bash
-          inputs.zig.packages.${system}.zig_0_15_1
-          inputs.zls.packages.${system}.zls_0_15_0
-        ];
-      };
-    });
-  };
+  outputs =
+    inputs:
+    let
+      forAllSystems = f: builtins.mapAttrs f inputs.nixpkgs.legacyPackages;
+    in
+    {
+      devShells = forAllSystems (
+        system: pkgs: {
+          default = pkgs.mkShellNoCC {
+            packages = with pkgs; [
+              bash
+              # zig_0_15
+              # zls_0_15
+              inputs.zig.packages.${system}.master
+              inputs.zls.packages.${system}.default
+            ];
+          };
+        }
+      );
+
+      formatter = forAllSystems (_: pkgs: pkgs.nixfmt-tree);
+    };
 }
