@@ -86,7 +86,7 @@ pub fn Axe(comptime config: Config) type {
         /// `env` is only used during initialization and is not stored.
         pub fn init(
             allocator: std.mem.Allocator,
-            _io: std.Io,
+            _io: ?std.Io,
             additional_writers: ?[]const *std.Io.Writer,
             env: ?*const std.process.Environ.Map,
         ) !void {
@@ -98,7 +98,8 @@ pub fn Axe(comptime config: Config) type {
                 var void_writer: std.Io.Writer.Discarding = .init(&.{});
                 try bogus.strftime(&void_writer.writer, config.time_format.strftime);
             }
-            io = _io;
+            if (_io) |new_io|
+                io = new_io;
             if (config.time_format != .disabled) {
                 timezone = try zeit.local(allocator, io, .{
                     .tz = if (env) |e| e.get("TZ") else null,
