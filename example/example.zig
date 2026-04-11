@@ -1,9 +1,7 @@
 const std = @import("std");
 const axe = @import("axe");
 
-const std_log = axe.Axe(.{
-    .mutex = .default,
-});
+const std_log = axe.Axe(.{});
 
 pub const std_options: std.Options = .{
     .logFn = std_log.log,
@@ -35,7 +33,7 @@ pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: *std.process.Env
                 .debug = "DeBuG",
             },
             .quiet = false, // disable stderr logging, default is false
-            .mutex = .none, // none by default
+            .mutex = .none, // default is based on builtin.single_threaded
         });
         var writer = std.Io.File.stdout().writer(io, &buffer);
         try stdout_log.init(allocator, io, &.{&writer.interface}, env);

@@ -35,10 +35,7 @@ exe.root_module.addImport("axe", axe);
 
 ```zig
 const std = @import("std");
-const axe = @import("axe").Axe(.{
-    // Config goes here.
-    .mutex = .{ .function = .progress_stderr },
-});
+const axe = @import("axe").Axe(.{});
 
 // Replace the default logFn.
 pub const std_options: std.Options = .{

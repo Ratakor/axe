@@ -57,7 +57,7 @@ pub const Config = struct {
         default,
         custom: type,
         function: FunctionMutex,
-    } = .none,
+    } = .default,
 };
 
 /// Create a new logger based on the given configuration.
