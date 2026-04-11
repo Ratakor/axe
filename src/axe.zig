@@ -58,6 +58,10 @@ pub const Config = struct {
         custom: type,
         function: FunctionMutex,
     } = .default,
+    /// Size of the allocator used to store timezone info and additional writers.
+    /// This is safe to set to 0 if time_format == .disabled and there are
+    /// no additional writers.
+    allocator_buffer_size: usize = 16 * 1024, // 8K should be enough but let's be precautious
 };
 
 /// Create a new logger based on the given configuration.
@@ -76,6 +80,9 @@ pub fn Axe(comptime config: Config) type {
             .default => if (builtin.single_threaded) {} else std.Io.Mutex.init,
             .custom => |T| T{},
         };
+        var fba_buffer: [config.allocator_buffer_size]u8 = undefined;
+        var fba: std.heap.FixedBufferAllocator = .init(&fba_buffer);
+        const allocator = fba.allocator();
 
         /// Setup timezone and tty configuration for stderr.
         /// This function should be called before any logging.
@@ -85,7 +92,6 @@ pub fn Axe(comptime config: Config) type {
         /// `env` is used to check `TZ` and `TZDIR` for the timezone.
         /// `env` is only used during initialization and is not stored.
         pub fn init(
-            allocator: std.mem.Allocator,
             _io: ?std.Io,
             additional_writers: ?[]const *std.Io.Writer,
             env: ?*const std.process.Environ.Map,
@@ -101,10 +107,10 @@ pub fn Axe(comptime config: Config) type {
             if (_io) |new_io|
                 io = new_io;
             if (config.time_format != .disabled) {
-                timezone = try zeit.local(allocator, io, .{
-                    .tz = if (env) |e| e.get("TZ") else null,
-                    .tzdir = if (env) |e| e.get("TZDIR") else null,
-                });
+                timezone = if (env) |e|
+                    try zeit.local(allocator, io, .{ .tz = e.get("TZ"), .tzdir = e.get("TZDIR") })
+                else
+                    try zeit.local(allocator, io, .{});
             }
             if (additional_writers) |_writers| {
                 writers = try allocator.dupe(*std.Io.Writer, _writers);
@@ -113,14 +119,7 @@ pub fn Axe(comptime config: Config) type {
         }
 
         /// Deinitialize the logger.
-        /// WARNING: If replacing `std.log` with `std_options` it is not
-        /// recommended to run `deinit` as the log instance should live until
-        /// the last program instant to output error logs from e.g.
-        /// gpa.deinit(). Consider using `std.heap.FixedBufferAllocator` to
-        /// avoid memory leaks warning from `std.heap.DebugAllocator`.
-        /// NOTE: There shouldn't be any issue if running a basic axe config
-        /// that requires no allocation (no time, no additional writers).
-        pub fn deinit(allocator: std.mem.Allocator) void {
+        pub fn deinit() void {
             if (config.time_format != .disabled) {
                 timezone.deinit();
             }
@@ -748,8 +747,8 @@ test "log without styles" {
         .styles = .none,
         .quiet = true,
     });
-    try log.init(std.testing.allocator, std.testing.io, &.{&writer}, null);
-    defer log.deinit(std.testing.allocator);
+    try log.init(std.testing.io, &.{&writer}, null);
+    defer log.deinit();
 
     log.info("Hello, {s}!", .{"world"});
     try expectEqualStrings("info: Hello, world!\n", writer.buffered());
@@ -789,8 +788,8 @@ test "log with complex config" {
         .quiet = true,
         .mutex = .default,
     });
-    try log.init(std.testing.allocator, std.testing.io, &.{&writer}, null);
-    defer log.deinit(std.testing.allocator);
+    try log.init(std.testing.io, &.{&writer}, null);
+    defer log.deinit();
 
     log.info("Hello, {s}!", .{"world"});
     try expectEqualStrings("[" ++ Style.fmt(&.{.blue}, "INFO") ++ "]: Hello, world!", writer.buffered());
@@ -826,8 +825,8 @@ test "time format" {
         },
     });
     log.quiet = true;
-    try log.init(std.testing.allocator, std.testing.io, &.{&dest.writer}, null);
-    defer log.deinit(std.testing.allocator);
+    try log.init(std.testing.io, &.{&dest.writer}, null);
+    defer log.deinit();
 
     log.info("Hello {c}", .{'W'});
     // [YYYY-mm-dd HH:MM:SS|INF] Hello W
@@ -858,8 +857,8 @@ test "json log" {
         .quiet = true,
         .color = .never,
     });
-    try log.init(std.testing.allocator, std.testing.io, &.{&writer}, null);
-    defer log.deinit(std.testing.allocator);
+    try log.init(std.testing.io, &.{&writer}, null);
+    defer log.deinit();
 
     log.debug("\"json log\"", .{});
     try expectEqualStrings(
@@ -892,8 +891,8 @@ test "updateTtyConfig" {
         .color = .never,
         .quiet = true,
     });
-    try log.init(std.testing.allocator, std.testing.io, &.{&writer}, null);
-    defer log.deinit(std.testing.allocator);
+    try log.init(std.testing.io, &.{&writer}, null);
+    defer log.deinit();
 
     log.debug("No color", .{});
     try expectEqualStrings("debug: No color\n", writer.buffered());

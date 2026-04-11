@@ -10,7 +10,7 @@ A fully customizable logging library for the Zig programming language.
 - Minimal (less than 1000 LOC)
 - Extremely fast performance with intensive use of comptime
 - Parallel file logging with support for stderr & custom writers
-- Full custom format support with sane defaults & [JSON](https://github.com/ratakor/axe/blob/master/example/example.zig#L93) support
+- Full custom format support with sane defaults & [JSON](https://github.com/ratakor/axe/blob/master/example/example.zig#L95) support
 - Source location support with `axe.logAt(@src(), ...)`
 - Built-in time support with [zeit](https://github.com/rockorager/zeit)
 - Built-in colors support
@@ -42,10 +42,9 @@ pub const std_options: std.Options = .{
     .logFn = axe.log,
 };
 
-pub fn main() !void {
-    const allocator = std.heap.page_allocator;
-    try axe.init(allocator, null, null);
-    defer axe.deinit(allocator);
+pub fn main(init: std.process.Init) !void {
+    try axe.init(init.io, null, init.environ_map);
+    defer axe.deinit();
 
     std.log.debug("Hello {s}!", .{ "World" });
     axe.infoAt(@src(), "Some info with source location", .{});

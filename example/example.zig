@@ -7,14 +7,11 @@ pub const std_options: std.Options = .{
     .logFn = std_log.log,
 };
 
-var std_log_fba_buffer: [4 * 4096]u8 = undefined;
-var std_log_fba: std.heap.FixedBufferAllocator = .init(&std_log_fba_buffer);
-
 pub fn main(init: std.process.Init) !void {
-    return juicyMain(init.gpa, init.io, init.environ_map);
+    return juicyMain(init.io, init.environ_map);
 }
 
-pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: *std.process.Environ.Map) !void {
+pub fn juicyMain(io: std.Io, env: *std.process.Environ.Map) !void {
     var buffer: [256]u8 = undefined;
 
     {
@@ -36,8 +33,8 @@ pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: *std.process.Env
             .mutex = .none, // default is based on builtin.single_threaded
         });
         var writer = std.Io.File.stdout().writer(io, &buffer);
-        try stdout_log.init(allocator, io, &.{&writer.interface}, env);
-        defer stdout_log.deinit(allocator);
+        try stdout_log.init(io, &.{&writer.interface}, env);
+        defer stdout_log.deinit();
 
         // wait we actually don't want stderr logging let's disable it
         stdout_log.quiet = true;
@@ -52,8 +49,8 @@ pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: *std.process.Env
         //   writers, it should be called at the very start of the program.
         // std.log supports all the features of axe.Axe even additional writers,
         //   time or custom mutex.
-        try std_log.init(std_log_fba.allocator(), io, null, env);
-        // defer std_log.deinit(allocator);
+        try std_log.init(io, null, env);
+        defer std_log.deinit();
 
         std.log.info("std.log.info with axe.Axe(.{{}})", .{});
 
@@ -85,8 +82,8 @@ pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: *std.process.Env
             .mutex = .default,
         });
         var writer = f.writer(io, &buffer);
-        try log.init(allocator, io, &.{&writer.interface}, env);
-        defer log.deinit(allocator);
+        try log.init(io, &.{&writer.interface}, env);
+        defer log.deinit();
 
         log.debug("Hello! This will have no color if NO_COLOR is defined or if piped", .{});
         log.scoped(.main).infoAt(@src(), "the time can be formatted like strftime or time.go", .{});
@@ -110,8 +107,8 @@ pub fn juicyMain(allocator: std.mem.Allocator, io: std.Io, env: *std.process.Env
             .color = .never,
         });
         var writer = json_file.writer(io, &buffer);
-        try json_log.init(allocator, io, &.{&writer.interface}, env);
-        defer json_log.deinit(allocator);
+        try json_log.init(io, &.{&writer.interface}, env);
+        defer json_log.deinit();
 
         json_log.debug("\"json log\"", .{});
         json_log.scoped(.main).info("\"json scoped\"", .{});
