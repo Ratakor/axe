@@ -8,10 +8,8 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main(init: std.process.Init) !void {
-    return juicyMain(init.io, init.environ_map);
-}
-
-pub fn juicyMain(io: std.Io, env: *std.process.Environ.Map) !void {
+    const io = init.io;
+    const env = init.environ_map;
     var buffer: [256]u8 = undefined;
 
     {
@@ -55,7 +53,7 @@ pub fn juicyMain(io: std.Io, env: *std.process.Environ.Map) !void {
         std.log.info("std.log.info with axe.Axe(.{{}})", .{});
 
         // actually we want forced colors, try running with NO_COLOR=1
-        std_log.updateTtyConfig(.always);
+        std_log.setTerminalMode(.always, env);
 
         std.log.scoped(.main).warn("this is scoped", .{});
     }

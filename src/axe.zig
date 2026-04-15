@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const zeit = @import("zeit");
 const windows = std.os.windows;
-const tty = std.Io.Terminal;
+const Terminal = std.Io.Terminal;
 
 pub const Config = struct {
     /// The format to use for the log messages.
@@ -42,7 +42,7 @@ pub const Config = struct {
         strftime: []const u8,
     } = .disabled,
     /// Whether to enable color output.
-    /// This can be modified at runtime using `updateTtyConfig`.
+    /// This can be modified at runtime using `setTerminalMode`.
     color: Color = .auto,
     /// Set to `.none` to disable all styles.
     styles: Styles = .{},
@@ -71,8 +71,8 @@ pub fn Axe(comptime config: Config) type {
         pub var quiet = config.quiet;
 
         var writers: []*std.Io.Writer = &.{};
-        var stderr_tty_config = defaultTtyConfig(config.color);
-        var writers_tty_config = defaultTtyConfig(config.color);
+        var stderr_terminal_mode = defaultTerminalMode(config.color);
+        var writers_terminal_mode = defaultTerminalMode(config.color);
         var timezone = if (config.time_format != .disabled) zeit.utc else {};
         var io: std.Io = std.Io.Threaded.global_single_threaded.io();
         var mutex = switch (config.mutex) {
@@ -115,7 +115,7 @@ pub fn Axe(comptime config: Config) type {
             if (additional_writers) |_writers| {
                 writers = try allocator.dupe(*std.Io.Writer, _writers);
             }
-            updateTtyConfig(config.color);
+            setTerminalMode(config.color, env);
         }
 
         /// Deinitialize the logger.
@@ -127,13 +127,18 @@ pub fn Axe(comptime config: Config) type {
         }
 
         /// Update tty configuration for stderr and additional writers.
-        pub fn updateTtyConfig(color: Color) void {
-            writers_tty_config = defaultTtyConfig(color);
-            stderr_tty_config = switch (color) {
-                .auto => tty.Mode.detect(io, std.Io.File.stderr(), false, false) catch .no_color,
+        pub fn setTerminalMode(color: Color, env: ?*const std.process.Environ.Map) void {
+            writers_terminal_mode = defaultTerminalMode(color);
+
+            const NO_COLOR, const CLICOLOR_FORCE = if (env) |e|
+                .{ e.get("NO_COLOR") != null, e.get("CLICOLOR_FORCE") != null }
+            else
+                .{ false, false };
+            stderr_terminal_mode = switch (color) {
+                .auto => Terminal.Mode.detect(io, .stderr(), NO_COLOR, CLICOLOR_FORCE) catch .no_color,
                 .always => if (builtin.os.tag == .windows)
-                    switch (tty.Mode.detect(io, std.Io.File.stderr(), false, false) catch .no_color) {
-                        .no_color, .escape_codes => .escape_codes,
+                    switch (Terminal.Mode.detect(io, .stderr(), NO_COLOR, CLICOLOR_FORCE) catch .no_color) {
+                        .no_color, .escape_codes => .escapes_codes,
                         .windows_api => |wa| .{ .windows_api = wa },
                     }
                 else
@@ -289,13 +294,13 @@ pub fn Axe(comptime config: Config) type {
 
             nosuspend {
                 for (writers) |writer| {
-                    print(src, writer, writers_tty_config, time, level, scope, format, args);
+                    print(src, writer, writers_terminal_mode, time, level, scope, format, args);
                     writer.flush() catch {};
                 }
                 if (!quiet) {
                     var buffer: [256]u8 = undefined;
                     var stderr = std.Io.File.stderr().writer(io, &buffer);
-                    print(src, &stderr.interface, stderr_tty_config, time, level, scope, format, args);
+                    print(src, &stderr.interface, stderr_terminal_mode, time, level, scope, format, args);
                     stderr.interface.flush() catch {};
                 }
             }
@@ -304,7 +309,7 @@ pub fn Axe(comptime config: Config) type {
         fn print(
             comptime src: ?std.builtin.SourceLocation,
             writer: *std.Io.Writer,
-            tty_config: tty.Mode,
+            terminal_mode: Terminal.Mode,
             time: if (config.time_format != .disabled) zeit.Time else void,
             comptime level: Level,
             comptime scope: @EnumLiteral(),
@@ -323,35 +328,35 @@ pub fn Axe(comptime config: Config) type {
                 switch (config.format[i]) {
                     'l' => callWithStyles(
                         writer,
-                        tty_config,
+                        terminal_mode,
                         @field(config.styles, @tagName(level)),
                         writeAllCallback,
                         .{ writer, @field(config.level_text, @tagName(level)) },
                     ),
                     's' => if (scope != .default) callWithStyles(
                         writer,
-                        tty_config,
+                        terminal_mode,
                         config.styles.scope,
                         writeAllCallback,
                         .{ writer, comptime parseScopeFormat(config.scope_format, scope) },
                     ),
                     't' => if (config.time_format != .disabled) callWithStyles(
                         writer,
-                        tty_config,
+                        terminal_mode,
                         config.styles.time,
                         writeTimeCallback,
                         .{ writer, time },
                     ) else @compileError("Time specifier without time format."),
                     'L' => if (src) |loc| callWithStyles(
                         writer,
-                        tty_config,
+                        terminal_mode,
                         config.styles.loc,
                         writeLocation,
                         .{ writer, config.loc_format, loc },
                     ),
                     'm' => callWithStyles(
                         writer,
-                        tty_config,
+                        terminal_mode,
                         config.styles.message,
                         printCallback,
                         .{ writer, format, args },
@@ -548,7 +553,7 @@ pub const Style = union(enum) {
         }
     }
 
-    fn applyWindows(style: Style, wa: tty.Mode.WindowsApi) void {
+    fn applyWindows(style: Style, wa: Terminal.Mode.WindowsApi) void {
         const attributes: windows.WORD = switch (style) {
             .black => 0,
             .red => windows.FOREGROUND_RED,
@@ -653,12 +658,12 @@ pub const FunctionMutex = struct {
 
 inline fn callWithStyles(
     writer: *std.Io.Writer,
-    tty_config: tty.Mode,
+    terminal_mode: Terminal.Mode,
     comptime styles: []const Style,
     comptime callback: anytype,
     args: anytype,
 ) void {
-    switch (tty_config) {
+    switch (terminal_mode) {
         .no_color => @call(.auto, callback, args),
         .escape_codes => {
             const open, const close = comptime Style.makeStyles(styles);
@@ -731,7 +736,7 @@ fn writeLocation(
     }
 }
 
-inline fn defaultTtyConfig(color: Color) tty.Mode {
+inline fn defaultTerminalMode(color: Color) Terminal.Mode {
     return switch (color) {
         .always => .escape_codes,
         .auto, .never => .no_color,
@@ -882,7 +887,7 @@ test "json log" {
     , writer.buffered());
 }
 
-test "updateTtyConfig" {
+test "setTerminalMode" {
     const expectEqualStrings = std.testing.expectEqualStrings;
     var buffer: [256]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buffer);
@@ -898,12 +903,12 @@ test "updateTtyConfig" {
     try expectEqualStrings("debug: No color\n", writer.buffered());
     writer.end = 0;
 
-    log.updateTtyConfig(.always);
+    log.setTerminalMode(.always, null);
     log.debug("With color", .{});
     try expectEqualStrings(Style.fmt(&.{ .bold, .cyan }, "debug") ++ ": With color\n", writer.buffered());
     writer.end = 0;
 
-    log.updateTtyConfig(.never);
+    log.setTerminalMode(.never, null);
     log.debug("No color again", .{});
     try expectEqualStrings("debug: No color again\n", writer.buffered());
 }
