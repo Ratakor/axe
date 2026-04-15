@@ -29,8 +29,8 @@
           default = pkgs.mkShellNoCC {
             packages = with pkgs; [
               bash
-              # zig_0_15
-              # zls_0_15
+              # zig_0_16
+              # zls_0_16
               inputs.zig.packages.${system}.master
               inputs.zls.packages.${system}.default
             ];
