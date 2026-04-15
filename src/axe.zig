@@ -138,7 +138,7 @@ pub fn Axe(comptime config: Config) type {
                 .auto => Terminal.Mode.detect(io, .stderr(), NO_COLOR, CLICOLOR_FORCE) catch .no_color,
                 .always => if (builtin.os.tag == .windows)
                     switch (Terminal.Mode.detect(io, .stderr(), NO_COLOR, CLICOLOR_FORCE) catch .no_color) {
-                        .no_color, .escape_codes => .escapes_codes,
+                        .no_color, .escape_codes => .escape_codes,
                         .windows_api => |wa| .{ .windows_api = wa },
                     }
                 else
