@@ -1,6 +1,6 @@
 .{
     .name = .axe,
-    .version = "0.8.0",
+    .version = "0.9.0",
     .fingerprint = 0x6c6a1e2ce5546233,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
