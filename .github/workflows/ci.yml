@@ -18,10 +18,10 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{matrix.os}}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: mlugg/setup-zig@v2
         with:
-          version: master
+          version: 0.17.0
       - run: zig build test --summary all
       - run: zig build run
         working-directory: example
@@ -29,8 +29,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: mlugg/setup-zig@v2
         with:
-          version: master
+          version: 0.17.0
       - run: zig fmt --check .
