@@ -2,11 +2,11 @@
     .name = .axe,
     .version = "0.8.0",
     .fingerprint = 0x6c6a1e2ce5546233,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .zeit = .{
-            .url = "git+https://github.com/rockorager/zeit#2a79678e05e4e82cd4efd4fd6b754dcf029c3a64",
-            .hash = "zeit-0.6.0-5I6bk7q6AgBdMJxze3D4l9ylQhkviQ_BX9FigDt13MFn",
+            .url = "git+https://github.com/rockorager/zeit?ref=main#06bb7b462b4218770fb5438ebe6b0c0c5ef18888",
+            .hash = "zeit-0.10.0-5I6bkxS-AgAaI3lI3RsXsWnPw7sMCqJKoFnSB8_QRAoo",
         },
     },
     .paths = .{

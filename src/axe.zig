@@ -288,7 +288,7 @@ pub fn Axe(comptime config: Config) type {
             };
 
             const time = if (config.time_format != .disabled) t: {
-                const now = zeit.instant(io, .{ .timezone = &timezone }) catch unreachable;
+                const now = zeit.instant(.{ .now = io }, &timezone);
                 break :t now.time();
             } else {};
 
